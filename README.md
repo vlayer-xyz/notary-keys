@@ -1,18 +1,18 @@
-# Vouch notary keys
+# vlayer notary keys
 
-The authoritative list of signing keys used by [Vouch](https://getvouch.io) notaries.
+The authoritative list of signing keys used by [vlayer](https://vlayer.xyz/) notaries.
 
 Every web proof carries the notary's public key inside the presentation, so TLSN
 verification alone only tells you that *some* key signed the attestation. To know
-that the key belongs to a Vouch notary, compare it against this list.
+that the key belongs to a vlayer notary, compare it against this list.
 
 | Environment | URL |
 | --- | --- |
-| Production | `https://keys.vlayer.xyz/notary-keys.json` |
+| Production | `https://keys.vlayer.xyz/notary-keys.production.json` |
 
 Changes are made by pull request to this repository and served from `main` via
 GitHub Pages. The commit history is the audit trail; an immutable snapshot of any
-version is available at `https://raw.githubusercontent.com/vlayer-xyz/notary-keys/<commit>/notary-keys.json`.
+version is available at `https://raw.githubusercontent.com/vlayer-xyz/notary-keys/<commit>/notary-keys.production.json`.
 
 ## Format
 
@@ -41,11 +41,11 @@ version is available at `https://raw.githubusercontent.com/vlayer-xyz/notary-key
 | `schemaVersion` | Bumped only for changes that affect the verifier rule below. |
 | `updatedAt` | When this version of the list was published. |
 | `fingerprintAlgorithm` | How `fingerprint` is derived from the key; see [Fingerprints](#fingerprints). |
-| `keys[].fingerprint` | Primary identifier of the key. Equals `notaryKeyFingerprint` returned by the Vouch verify API. |
+| `keys[].fingerprint` | Primary identifier of the key. Equals `notaryKeyFingerprint` returned by the [vlayer verify API](https://platform.vlayer.xyz/server-side/rest-api/verify). |
 | `keys[].publicKeyPem` | The key as a compressed-point SubjectPublicKeyInfo PEM, byte-identical to the `publicKey` field of the notary's `GET /info`. |
 | `keys[].curve` | `secp256k1` or `secp256r1`. |
 | `keys[].validFrom` | Start of the window in which the key signed proofs (inclusive). |
-| `keys[].validUntil` | End of the window (exclusive), or `null` while the key is in use. Set when the key is rotated out. |
+| `keys[].validUntil` | *Mutable*. End of the window (exclusive), or `null` when the key doesn't have end of validity set yet. Set when the key is rotated out or is going to be rotated out. |
 | `keys[].meta` | Informational only. Verifiers must not base any decision on it. `notaryUrls` lists the notaries signing with the key. |
 
 Entries are never removed: a key that has been rotated out stays listed with its
@@ -60,12 +60,8 @@ Accept a proof if and only if:
 2. `validFrom <= tlsTimestamp < validUntil` for that entry (`validUntil: null` means no upper bound),
 
 where `tlsTimestamp` is the TLS session time recorded in the attestation (returned
-as `tlsTimestamp` by the Vouch verify API). This is what keeps proofs signed by a
-since-rotated key verifiable. Verifiers that cannot evaluate timestamps may
-instead accept any key whose `validUntil` is `null` or in the future.
-
-Do not use the `notaryUrl` carried inside a presentation as a trust input; only the
-key matters.
+as `tlsTimestamp` by the [vlayer verify API](https://platform.vlayer.xyz/server-side/rest-api/verify)). This is what keeps proofs signed by a
+since-rotated key verifiable.
 
 ## Fingerprints
 
@@ -94,19 +90,14 @@ match `publicKeyPem` byte for byte.
 
 The file is served with `Cache-Control: max-age=600` and an `ETag`. Poll it on a
 schedule, send `If-None-Match` to make unchanged fetches cheap, and treat a copy
-you have been unable to refresh as stale. Rotations are announced ahead of time and
-published with an overlap window, so a copy that is a few hours old is safe; a copy
-that is weeks old is not.
+you have been unable to refresh as stale.
 
 ## Making changes
 
 - **Add a key** (rotation or a new notary): append an entry with `validFrom` set to
   the planned cutover and `validUntil: null`. Verifiers accept it from `validFrom`
   onward without a second edit.
-- **Rotate a key out**: set its `validUntil` to the moment the last notary stopped
-  signing with it. Do not remove the entry.
-- **Compromised key**: set `validUntil` to the earliest known or suspected
-  compromise time, in a single emergency pull request merged before the notary is
-  rotated, and record the incident under `meta`.
+- **Rotate a key out**: set its `validUntil` to the moment the last notary will stop
+  signing with it, before it actually happens. Do not remove the entry.
 
 Every change bumps `updatedAt`.
