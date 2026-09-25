@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "updatedAt": "2026-09-24T00:00:00Z",
+  "fingerprintAlgorithm": "sha256 over compressed SEC1 public key, lowercase hex",
+  "keys": [
+    {
+      "fingerprint": "a7e62d7f17aa7a22c26bdb93b7ce9400e826ffb2c6f54e54d2ded015677499af",
+      "publicKeyPem": "-----BEGIN PUBLIC KEY-----\nMDYwEAYHKoZIzj0CAQYFK4EEAAoDIgAC1Mu6mQsMLrHdRbKcfSYHUpnx6jkxfzUU\nDm73HnA77ac=\n-----END PUBLIC KEY-----\n",
+      "curve": "secp256k1",
+      "validFrom": "2024-11-28T00:00:00Z",
+      "validUntil": null,
+      "meta": {
+        "notaryUrls": [
+          "https://notary.production.vlayer.xyz",
+          "https://notary.vlayer.xyz"
+        ]
+      }
+    }
+  ]
+}
