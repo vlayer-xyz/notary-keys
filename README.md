@@ -102,22 +102,3 @@ you have been unable to refresh as stale.
   signing with it, before it actually happens. Do not remove the entry.
 
 Every change bumps `updatedAt`.
-
-CI (`.github/workflows/validate.yml`, `scripts/validate.js`) enforces on every pull
-request: the file matches [`schema.json`](schema.json) and is canonically formatted
-(2-space indent, trailing newline); every timestamp is a real UTC instant; each
-`fingerprint` equals the SHA-256 of the compressed point recomputed from
-`publicKeyPem`, `curve` matches the key, and the PEM is in compressed form;
-fingerprints are unique; `validUntil` is after `validFrom`; no entry is removed and
-`publicKeyPem`, `curve`, `validFrom` never change; a `validUntil` that has already
-passed can only be moved earlier; `updatedAt` is bumped whenever `keys` changes. It
-also fetches `GET /info` from every notary of every open-window key and reports a
-served key that differs from the listed one as a warning (expected mid-rotation).
-The rules live in `scripts/rules.js` and are covered by `scripts/rules.test.js`. To
-run locally (Node 22+, pnpm):
-
-```sh
-pnpm install
-pnpm test
-pnpm validate --base origin/main --live
-```

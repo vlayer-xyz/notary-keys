@@ -8,7 +8,7 @@
   },
   "packageManager": "pnpm@10.12.1",
   "scripts": {
-    "validate": "node scripts/validate.js",
+    "validate": "node scripts/validate-notary-keys.js",
     "test": "node --test"
   },
   "dependencies": {
