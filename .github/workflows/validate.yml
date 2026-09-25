@@ -10,74 +10,16 @@ permissions:
 
 jobs:
   validate:
-    name: Schema, fingerprints and change rules
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
+        with:
+          fetch-depth: 0 # the change rules compare against the base branch
       - uses: pnpm/action-setup@v4
-
       - uses: actions/setup-node@v4
         with:
           node-version: 24
           cache: pnpm
-
       - run: pnpm install --frozen-lockfile
-
-      - run: pnpm typecheck
-
-      - name: Fetch base branch
-        if: github.event_name == 'pull_request'
-        run: git fetch --no-tags --depth=1 origin "+refs/heads/${{ github.base_ref }}:refs/remotes/base"
-
-      - name: Validate every list against its base version
-        run: |
-          set -euo pipefail
-          status=0
-          for file in notary-keys.*.json; do
-            base_args=()
-            if [ "${{ github.event_name }}" = "pull_request" ]; then
-              if git show "base:$file" > "/tmp/base-$file" 2>/dev/null; then
-                base_args=(--base "/tmp/base-$file")
-              fi
-            fi
-            echo "::group::$file"
-            node scripts/validate.ts "$file" "${base_args[@]}" || status=1
-            echo "::endgroup::"
-          done
-          exit $status
-
-      - name: Validate schema.json itself
-        run: |
-          node --input-type=module -e '
-            import { readFileSync } from "node:fs";
-            import { Ajv2020 } from "ajv/dist/2020.js";
-            new Ajv2020().compile(JSON.parse(readFileSync("schema.json", "utf8")));
-            console.log("schema.json is a valid 2020-12 schema");
-          '
-
-  live:
-    name: Compare open-window keys with each notary's /info (advisory)
-    runs-on: ubuntu-latest
-    continue-on-error: true
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: pnpm/action-setup@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          cache: pnpm
-
-      - run: pnpm install --frozen-lockfile
-
-      - run: |
-          set -euo pipefail
-          status=0
-          for file in notary-keys.*.json; do
-            echo "::group::$file"
-            node scripts/validate.ts "$file" --live || status=1
-            echo "::endgroup::"
-          done
-          exit $status
+      - run: pnpm test
+      - run: pnpm validate --base origin/${{ github.base_ref || 'main' }} --live

@@ -4,16 +4,14 @@
   "type": "module",
   "description": "Validation for the vlayer notary key lists served at https://keys.vlayer.xyz",
   "engines": {
-    "node": ">=24"
+    "node": ">=22"
   },
   "packageManager": "pnpm@10.12.1",
   "scripts": {
-    "validate": "node scripts/validate.ts",
-    "typecheck": "tsc --noEmit"
+    "validate": "node scripts/validate.js",
+    "test": "node --test"
   },
-  "devDependencies": {
-    "@types/node": "^24.13.6",
-    "ajv": "^8.20.0",
-    "typescript": "^7.0.2"
+  "dependencies": {
+    "ajv": "^8.20.0"
   }
 }
