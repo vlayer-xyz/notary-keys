@@ -1,0 +1,79 @@
+name: validate
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Schema, fingerprints and change rules
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: scripts/requirements.txt
+
+      - run: pip install -r scripts/requirements.txt
+
+      - name: Fetch base branch
+        if: github.event_name == 'pull_request'
+        run: git fetch --no-tags --depth=1 origin "+refs/heads/${{ github.base_ref }}:refs/remotes/base"
+
+      - name: Validate every list against its base version
+        run: |
+          set -euo pipefail
+          status=0
+          for file in notary-keys.*.json; do
+            base_args=()
+            if [ "${{ github.event_name }}" = "pull_request" ]; then
+              if git show "base:$file" > "/tmp/base-$file" 2>/dev/null; then
+                base_args=(--base "/tmp/base-$file")
+              fi
+            fi
+            echo "::group::$file"
+            python3 scripts/validate.py "$file" "${base_args[@]}" || status=1
+            echo "::endgroup::"
+          done
+          exit $status
+
+      - name: Validate schema.json itself
+        run: |
+          python3 - <<'EOF'
+          import json, jsonschema
+          schema = json.load(open("schema.json"))
+          jsonschema.Draft202012Validator.check_schema(schema)
+          print("schema.json is a valid 2020-12 schema")
+          EOF
+
+  live:
+    name: Compare open-window keys with each notary's /info (advisory)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: scripts/requirements.txt
+
+      - run: pip install -r scripts/requirements.txt
+
+      - run: |
+          set -euo pipefail
+          status=0
+          for file in notary-keys.*.json; do
+            echo "::group::$file"
+            python3 scripts/validate.py "$file" --live || status=1
+            echo "::endgroup::"
+          done
+          exit $status
