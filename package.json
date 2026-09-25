@@ -1,0 +1,19 @@
+{
+  "name": "notary-keys",
+  "private": true,
+  "type": "module",
+  "description": "Validation for the vlayer notary key lists served at https://keys.vlayer.xyz",
+  "engines": {
+    "node": ">=24"
+  },
+  "packageManager": "pnpm@10.12.1",
+  "scripts": {
+    "validate": "node scripts/validate.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^24.13.6",
+    "ajv": "^8.20.0",
+    "typescript": "^7.0.2"
+  }
+}
