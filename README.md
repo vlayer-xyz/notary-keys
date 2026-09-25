@@ -8,7 +8,7 @@ that the key belongs to a vlayer notary, compare it against this list.
 
 | Environment | URL |
 | --- | --- |
-| Production | `https://keys.vlayer.xyz/notary-keys.production.json` |
+| Production | [`https://keys.vlayer.xyz/notary-keys.production.json`](https://keys.vlayer.xyz/notary-keys.production.json) |
 
 Changes are made by pull request to this repository and served from `main` via
 GitHub Pages. The commit history is the audit trail; an immutable snapshot of any
