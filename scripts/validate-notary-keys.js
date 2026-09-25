@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Usage: node scripts/validate.js [--base GIT_REF] [--live] [FILE...]
+// Usage: node scripts/validate-notary-keys.js [--base GIT_REF] [--live] [FILE...]
 //
 // Validates every notary-keys.*.json (or the given files). With --base, also enforces the
 // change rules against the version of each file at that git ref. With --live, cross-checks

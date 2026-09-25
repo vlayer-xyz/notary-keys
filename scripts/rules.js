@@ -2,7 +2,6 @@ import { createHash, createPublicKey } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { Ajv2020 } from "ajv/dist/2020.js";
 
-// compile() also validates schema.json against the 2020-12 meta-schema and throws if it is broken.
 const schema = JSON.parse(readFileSync(new URL("../schema.json", import.meta.url), "utf8"));
 const matchesSchema = new Ajv2020({ allErrors: true }).compile(schema);
 

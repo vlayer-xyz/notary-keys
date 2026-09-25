@@ -1,4 +1,4 @@
-name: validate
+name: validate notary keys
 
 on:
   pull_request:
