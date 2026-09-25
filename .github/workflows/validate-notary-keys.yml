@@ -9,7 +9,7 @@ permissions:
   contents: read
 
 jobs:
-  validate:
+  validate-notary-keys:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
