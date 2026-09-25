@@ -9,6 +9,7 @@ that the key belongs to a vlayer notary, compare it against this list.
 | Environment | URL |
 | --- | --- |
 | Production | `https://keys.vlayer.xyz/notary-keys.production.json` |
+| JSON Schema | `https://keys.vlayer.xyz/schema.json` |
 
 Changes are made by pull request to this repository and served from `main` via
 GitHub Pages. The commit history is the audit trail; an immutable snapshot of any
@@ -101,3 +102,19 @@ you have been unable to refresh as stale.
   signing with it, before it actually happens. Do not remove the entry.
 
 Every change bumps `updatedAt`.
+
+CI (`.github/workflows/validate.yml`, `scripts/validate.py`) enforces on every pull
+request: the file matches [`schema.json`](schema.json) and is canonically formatted
+(2-space indent, trailing newline); each `fingerprint` equals the SHA-256 of the
+compressed point recomputed from `publicKeyPem`, `curve` matches the key, and the PEM
+is in compressed form; fingerprints are unique; `validUntil` is after `validFrom`;
+no entry is removed and `publicKeyPem`, `curve`, `validFrom` never change; a
+`validUntil` that has already passed can only be moved earlier; `updatedAt` is bumped
+whenever `keys` changes. A separate advisory job fetches `GET /info` from every notary
+of every open-window key and compares the served key with the listed one. To run
+locally:
+
+```sh
+pip install -r scripts/requirements.txt
+python3 scripts/validate.py notary-keys.production.json --base <(git show main:notary-keys.production.json) --live
+```
