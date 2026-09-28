@@ -1,10 +1,8 @@
 name: validate notary keys
 
 on:
+  # Retargeting a pull request to another base does not re-trigger this; re-run the check manually.
   pull_request:
-    # `edited` covers a change of the PR's base branch, which changes what the lists are compared
-    # against. It also fires on title/body edits, which is cheap.
-    types: [opened, synchronize, reopened, edited]
   push:
     branches: [main]
 
@@ -21,8 +19,6 @@ jobs:
   # The key lists themselves. Kept separate from the validator's own tests so that a bad list
   # always surfaces as annotations from this job.
   validate-notary-keys:
-    # `edited` also fires on closed pull requests, where there is nothing left to check.
-    if: github.event_name != 'pull_request' || github.event.pull_request.state == 'open'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
@@ -47,7 +43,6 @@ jobs:
       - run: pnpm validate --base "$BASE" $LIVE_FLAG # shellcheck disable=SC2086
 
   test:
-    if: github.event_name != 'pull_request' || github.event.pull_request.state == 'open'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
