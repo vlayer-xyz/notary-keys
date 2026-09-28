@@ -2,6 +2,8 @@ name: validate notary keys
 
 on:
   pull_request:
+    # `edited` re-runs the check when a PR is retargeted, e.g. a stacked PR moving to main.
+    types: [opened, synchronize, reopened, edited]
   push:
     branches: [main]
 
@@ -11,15 +13,19 @@ permissions:
 jobs:
   validate-notary-keys:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      # Pull requests are compared against their base branch, pushes against the previous tip.
+      BASE: ${{ github.event_name == 'pull_request' && format('origin/{0}', github.base_ref) || github.event.before }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
-          fetch-depth: 0 # the change rules compare against the base branch
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
+          fetch-depth: 0 # the change rules compare against the base
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          node-version: 24
+          node-version-file: .nvmrc
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm test
-      - run: pnpm validate --base origin/${{ github.base_ref || 'main' }} --live
+      - run: pnpm validate --base "$BASE" --live
