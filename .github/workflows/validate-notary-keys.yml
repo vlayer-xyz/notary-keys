@@ -16,8 +16,6 @@ jobs:
     timeout-minutes: 10
     env:
       BASE: origin/${{ github.base_ref }}
-      # Notary URLs come from the PR; only probe them for branches of this repository.
-      LIVE_FLAG: ${{ github.event.pull_request.head.repo.full_name == github.repository && '--live' || '' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -29,7 +27,7 @@ jobs:
           node-version-file: .nvmrc
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: pnpm validate --base "$BASE" $LIVE_FLAG
+      - run: pnpm validate --base "$BASE"
 
   test:
     runs-on: ubuntu-latest

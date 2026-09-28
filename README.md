@@ -150,5 +150,5 @@ Locally, with the Node version from `.nvmrc` and the pnpm version from `package.
 ```sh
 pnpm install
 pnpm test
-pnpm validate --base origin/main --live
+pnpm validate --base origin/main
 ```

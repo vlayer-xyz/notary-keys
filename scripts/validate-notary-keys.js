@@ -1,11 +1,11 @@
 #!/usr/bin/env node
-// Usage: node scripts/validate-notary-keys.js [--base GIT_REF] [--live] [FILE...]
+// Usage: node scripts/validate-notary-keys.js [--base GIT_REF] [FILE...]
 //
 // Validates every notary-keys.<env>.json at the repository root (or the given files, which need
 // not match that pattern). With --base, also enforces the change rules against the version of
-// each file at that git ref, and fails if a list present there is missing here. With --live,
-// cross-checks open-window keys against each notary's GET /info and reports differences as
-// warnings. Exits 1 if anything has errors.
+// each file at that git ref, and fails if a list present there is missing here. Valid lists are
+// cross-checked against each notary's GET /info; differences are warnings. Exits 1 if anything
+// has errors.
 import { execFileSync } from "node:child_process";
 import { lstatSync, readdirSync, readFileSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
@@ -40,7 +40,7 @@ const describe = (cause) => String(cause?.message ?? cause).trim();
 // stack trace.
 try {
   const { values, positionals } = parseArgs({
-    options: { base: { type: "string" }, live: { type: "boolean", default: false } },
+    options: { base: { type: "string" } },
     allowPositionals: true,
   });
   const root = execFileSync("git", ["rev-parse", "--show-toplevel"], { encoding: "utf8", stdio: "pipe" }).trim();
@@ -84,7 +84,7 @@ try {
       if (values.base !== undefined && base === undefined) report("warning", file, `not present at ${values.base}; change rules skipped`);
       const errors = validate(raw, { base });
       errors.forEach((error) => fail(file, error));
-      if (values.live && errors.length === 0) {
+      if (errors.length === 0) {
         const warnings = await checkLive(raw);
         warnings.forEach((warning) => report("warning", file, warning));
       }

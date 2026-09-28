@@ -7,11 +7,18 @@ import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, it } from "node:test";
 
 const script = fileURLToPath(new URL("./validate-notary-keys.js", import.meta.url));
-const production = readFileSync(new URL("../notary-keys.production.json", import.meta.url), "utf8");
 const FILE = "notary-keys.test.json";
+const UNREACHABLE = "https://127.0.0.1:1";
 
 // Each test runs the CLI in a throwaway git repository whose only list is a copy of the
-// committed one, committed at HEAD.
+// committed one, committed at HEAD, with its notaries pointed at a closed port so the live check
+// stays offline.
+const committed = JSON.parse(readFileSync(new URL("../notary-keys.production.json", import.meta.url), "utf8"));
+const seed = `${JSON.stringify(
+  { ...committed, keys: committed.keys.map((key) => ({ ...key, meta: { ...key.meta, notaryUrls: [UNREACHABLE] } })) },
+  null,
+  2,
+)}\n`;
 let repo;
 const git = (...args) => execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.com", ...args], { cwd: repo, encoding: "utf8" });
 const write = (contents, file = FILE) => writeFileSync(join(repo, file), contents);
@@ -31,7 +38,7 @@ const withKey = (raw, patch) => {
 beforeEach(() => {
   repo = mkdtempSync(join(tmpdir(), "notary-keys-"));
   git("init", "-q", "-b", "main");
-  write(production);
+  write(seed);
   git("add", "-A");
   git("commit", "-q", "-m", "seed");
 });
@@ -78,7 +85,7 @@ describe("validate-notary-keys CLI", () => {
     assert.match(stdout, new RegExp(`^${FILE}: OK$`, "m"));
   });
   it("fails when a list present at --base was replaced by a symlink, even if another list was added", () => {
-    write(production, "notary-keys.other.json");
+    write(seed, "notary-keys.other.json");
     unlinkSync(join(repo, FILE));
     symlinkSync("notary-keys.other.json", join(repo, FILE));
     const { status, stderr } = run(["--base", "HEAD"]);
@@ -104,20 +111,20 @@ describe("validate-notary-keys CLI", () => {
     assert.match(stderr, /^::error file=list%2Ca%3Ab\.json::file is not valid JSON/m);
   });
   it("reports errors as GitHub annotations and exits 1", () => {
-    write(JSON.stringify(JSON.parse(production)));
+    write(JSON.stringify(JSON.parse(seed)));
     const { status, stdout, stderr } = run([], { annotations: true });
     assert.equal(status, 1);
     assert.match(stderr, new RegExp(`^::error file=${FILE}::file is not canonically formatted`, "m"));
     assert.match(stdout, new RegExp(`^${FILE}: 1 error\\(s\\)$`, "m"));
   });
   it("escapes newlines and percent signs in annotation messages", () => {
-    write(bumped(production, { "a\nb%": 1 }));
+    write(bumped(seed, { "a\nb%": 1 }));
     const { stderr } = run([], { annotations: true });
     assert.match(stderr, /^::error file=.*::schema: <root> has unknown field "a%0Ab%25"$/m);
   });
   it("rejects a list that is not valid UTF-8 and keeps checking the other lists", () => {
-    writeFileSync(join(repo, FILE), Buffer.concat([Buffer.from(production.slice(0, -3)), Buffer.from([0xff]), Buffer.from(production.slice(-3))]));
-    write(production, "notary-keys.other.json");
+    writeFileSync(join(repo, FILE), Buffer.concat([Buffer.from(seed.slice(0, -3)), Buffer.from([0xff]), Buffer.from(seed.slice(-3))]));
+    write(seed, "notary-keys.other.json");
     const { status, stdout, stderr } = run([]);
     assert.equal(status, 1);
     assert.match(stderr, new RegExp(`^ERROR ${FILE}: The encoded data was not valid for encoding utf-8$`, "m"));
@@ -125,26 +132,26 @@ describe("validate-notary-keys CLI", () => {
   });
   it("reports a list the validator cannot process and keeps checking the other lists", () => {
     const deep = `${"[".repeat(200_000)}${"]".repeat(200_000)}`;
-    write(`${JSON.stringify({ ...JSON.parse(production), keys: [{ ...JSON.parse(production).keys[0], meta: { notaryUrls: ["https://x.example"], deep: "PLACEHOLDER" } }] }, null, 2).replace('"PLACEHOLDER"', deep)}\n`);
-    write(production, "notary-keys.other.json");
+    write(`${JSON.stringify({ ...JSON.parse(seed), keys: [{ ...JSON.parse(seed).keys[0], meta: { notaryUrls: ["https://x.example"], deep: "PLACEHOLDER" } }] }, null, 2).replace('"PLACEHOLDER"', deep)}\n`);
+    write(seed, "notary-keys.other.json");
     const { status, stdout, stderr } = run([]);
     assert.equal(status, 1);
     assert.match(stderr, new RegExp(`^ERROR ${FILE}: `, "m"));
     assert.match(stdout, /^notary-keys\.other\.json: OK$/m);
   });
   it("enforces the change rules against --base", () => {
-    write(withKey(production, { validFrom: "2024-11-27T00:00:00Z" }));
+    write(withKey(seed, { validFrom: "2024-11-27T00:00:00Z" }));
     assert.equal(run([]).status, 0);
     const { status, stderr } = run(["--base", "HEAD"]);
     assert.equal(status, 1);
     assert.match(stderr, new RegExp(`^ERROR ${FILE}: keys\\[0\\] .*: validFrom .* has passed and is immutable$`, "m"));
   });
-  it("probes the notaries with --live and reports them as warnings", () => {
-    write(withKey(production, { meta: { notaryUrls: ["https://127.0.0.1:1"] } }));
-    const { status, stdout } = run(["--live"], { annotations: true });
+  it("probes the notaries of valid lists and reports problems as warnings", () => {
+    const { status, stdout } = run([], { annotations: true });
     assert.equal(status, 0, stdout);
-    assert.match(stdout, new RegExp(`^::warning file=${FILE}::keys\\[0\\] .*: https://127\\.0\\.0\\.1:1/info unreachable: `, "m"));
-    assert.doesNotMatch(run([]).stdout, /warning/);
+    assert.match(stdout, new RegExp(`^::warning file=${FILE}::keys\\[0\\] .*: ${UNREACHABLE}/info unreachable: `, "m"));
+    write(JSON.stringify(JSON.parse(seed)));
+    assert.doesNotMatch(run([]).stdout, /WARNING/);
   });
   it("fails loudly on an unknown base ref", () => {
     const { status, stderr } = run(["--base", "no-such-ref"]);
@@ -158,20 +165,20 @@ describe("validate-notary-keys CLI", () => {
     assert.match(stderr, new RegExp(`^ERROR: Command failed: git ls-tree .*${"0".repeat(40)}`, "m"));
   });
   it("treats a list that was a symlink at --base as absent there", () => {
-    write(production, "real.json");
+    write(seed, "real.json");
     unlinkSync(join(repo, FILE));
     symlinkSync("real.json", join(repo, FILE));
     git("add", "-A");
     git("commit", "-q", "-m", "symlink");
     unlinkSync(join(repo, FILE));
-    write(production);
+    write(seed);
     const { status, stdout } = run(["--base", "HEAD"]);
     assert.equal(status, 0, stdout);
     assert.match(stdout, new RegExp(`^WARNING ${FILE}: not present at HEAD; change rules skipped$`, "m"));
   });
   it("fails when a list present at --base was deleted", () => {
     unlinkSync(join(repo, FILE));
-    write(production, "notary-keys.other.json");
+    write(seed, "notary-keys.other.json");
     const { status, stderr } = run(["--base", "HEAD"]);
     assert.equal(status, 1);
     assert.match(stderr, new RegExp(`^ERROR ${FILE}: removed or not a regular file; key lists are never deleted or renamed$`, "m"));
@@ -189,7 +196,7 @@ describe("validate-notary-keys CLI", () => {
     assert.match(stdout, /^WARNING notary-keys\.renamed\.json: not present at HEAD; change rules skipped$/m);
   });
   it("validates only the given files but still detects deletions", () => {
-    write(production, "notary-keys.other.json");
+    write(seed, "notary-keys.other.json");
     git("add", "-A");
     git("commit", "-q", "-m", "second list");
     unlinkSync(join(repo, "notary-keys.other.json"));
