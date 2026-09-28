@@ -48,7 +48,25 @@ describe("validate-notary-keys CLI", () => {
     unlinkSync(join(repo, FILE));
     const { status, stderr } = run([]);
     assert.equal(status, 1);
-    assert.match(stderr, /ERROR: no notary-keys\.\*\.json found/);
+    assert.match(stderr, /ERROR: no notary-keys\.<env>\.json found/);
+  });
+  it("ignores directories and oddly named files that look like lists", () => {
+    mkdirSync(join(repo, "notary-keys.dir.json"));
+    write("{", "notary-keys.a,b:c.json");
+    const { status, stdout } = run([]);
+    assert.equal(status, 0, stdout);
+    assert.match(stdout, new RegExp(`^${FILE}: OK$`, "m"));
+  });
+  it("fails with an error line, not a stack trace, for an unreadable positional file", () => {
+    const { status, stderr } = run(["no-such.json"]);
+    assert.equal(status, 1);
+    assert.match(stderr, /^ERROR: ENOENT.*no-such\.json/m);
+    assert.doesNotMatch(stderr, /^\s+at /m);
+  });
+  it("escapes the file name in annotations", () => {
+    write("{", "list,a:b.json");
+    const { stderr } = run(["list,a:b.json"], { annotations: true });
+    assert.match(stderr, /^::error file=list%2Ca%3Ab\.json::file is not valid JSON/m);
   });
   it("reports errors as GitHub annotations and exits 1", () => {
     write(JSON.stringify(JSON.parse(production)));
@@ -70,8 +88,14 @@ describe("validate-notary-keys CLI", () => {
   });
   it("fails loudly on an unknown base ref", () => {
     const { status, stderr } = run(["--base", "no-such-ref"]);
-    assert.notEqual(status, 0);
-    assert.match(stderr, /no-such-ref/);
+    assert.equal(status, 1);
+    assert.match(stderr, /^ERROR: .*no-such-ref/m);
+    assert.doesNotMatch(stderr, /^\s+at /m);
+  });
+  it("fails loudly on the all-zeros base of a newly created branch", () => {
+    const { status, stderr } = run(["--base", "0".repeat(40)]);
+    assert.equal(status, 1);
+    assert.match(stderr, /^ERROR: Command failed: git ls-tree .*\nfatal: not a tree object$/m);
   });
   it("fails when a list present at --base was deleted", () => {
     unlinkSync(join(repo, FILE));

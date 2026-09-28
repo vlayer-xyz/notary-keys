@@ -105,8 +105,8 @@ you have been unable to refresh as stale.
 - **Rotate a key out**: set its `validUntil` to the moment the last notary will stop
   signing with it, before it actually happens. Do not remove the entry.
 
-Every change sets `updatedAt` to the current UTC time (`date -u +%FT%TZ`); two
-versions with the same `updatedAt` are rejected.
+Every change sets `updatedAt` to the current UTC time (`date -u +%FT%TZ`); a change
+that keeps the previous `updatedAt` is rejected.
 
 ## Validation
 
@@ -116,20 +116,22 @@ against the previous version of each list. It fails on:
 - a list that does not match `schema.json`, has a field outside those described
   (except inside `meta`), lacks `meta.notaryUrls`, or is not formatted as
   `JSON.stringify(doc, null, 2)` with a trailing newline;
+- a timestamp that is not a real UTC instant, an `updatedAt` more than 24 h in the
+  future, a `validUntil` not after `validFrom`, or two entries with the same `fingerprint`;
 - a `fingerprint`, `curve` or `publicKeyPem` that does not match the key itself
   (`publicKeyPem` must be the compressed-point form the notary serves, byte for byte);
 - a removed or renamed list, a removed entry, or a change to `publicKeyPem`, `curve`
   or `validFrom`;
 - a `validUntil` that had already passed being moved later or back to `null`;
-- a new entry's `validFrom`, or a `validUntil` newly set on an open window, more than
-  7 days in the past — the list cannot be backdated, and a retroactive close cannot be
-  undone. A key compromise that needs a deeper cut changes the grace period in
+- a new entry's `validFrom`, or any change to a `validUntil`, more than 7 days in the
+  past — the list cannot be backdated, and a retroactive close cannot be undone. A key
+  compromise that needs a deeper cut changes the grace period in
   [`scripts/rules.js`](scripts/rules.js) in the same pull request, where reviewers see it;
-- `updatedAt` moving backwards, or not moving when `keys` changed.
+- `updatedAt` moving backwards, or not moving when anything else changed.
 
 The "already passed" and "in the past" rules are evaluated at the time the check runs.
-A pull request that touches `validUntil` should be re-run right before merging if it
-has been open for a while.
+A pull request that touches `validUntil` should be re-run ("Re-run all jobs" on the
+check) right before merging if it has been open for a while.
 
 Additionally, for every key whose window is currently open, the notaries in
 `meta.notaryUrls` are queried and a `publicKey` that differs from `publicKeyPem` is
@@ -140,7 +142,8 @@ The check catches mistakes. It is not a defence against a malicious pull request
 which could change the rules in the same diff: review changes under `scripts/`,
 `schema.json` and `.github/` with the same care as the key list itself.
 
-Locally:
+Locally, with the Node version from `.nvmrc` and the pnpm version from `package.json`
+(`nvm use && corepack enable`):
 
 ```sh
 pnpm install

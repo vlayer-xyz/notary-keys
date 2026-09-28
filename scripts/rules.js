@@ -26,21 +26,24 @@ const matchesStrictSchema = ajv.compile({
   },
 });
 
-// node:crypto reports OpenSSL curve names; the list uses SEC 2 names.
-const CURVES = { secp256k1: "secp256k1", prime256v1: "secp256r1" };
-// SubjectPublicKeyInfo DER up to (excluding) the 33-byte compressed point, per curve.
-const SPKI_PREFIX = {
-  secp256k1: Buffer.from("3036301006072a8648ce3d020106052b8104000a032200", "hex"),
-  secp256r1: Buffer.from("3039301306072a8648ce3d020106082a8648ce3d030107032200", "hex"),
+// Supported curves, keyed by the OpenSSL name node:crypto reports. `name` is the SEC 2 name used
+// in the list (schema.json's `curve` enum must list exactly these), `spkiPrefix` the
+// SubjectPublicKeyInfo DER up to (excluding) the 33-byte compressed point.
+export const CURVES = {
+  secp256k1: { name: "secp256k1", spkiPrefix: Buffer.from("3036301006072a8648ce3d020106052b8104000a032200", "hex") },
+  prime256v1: { name: "secp256r1", spkiPrefix: Buffer.from("3039301306072a8648ce3d020106082a8648ce3d030107032200", "hex") },
 };
 const IMMUTABLE = ["publicKeyPem", "curve", "validFrom"];
-const DAY_MS = 24 * 60 * 60 * 1000;
+const HOUR_MS = 60 * 60 * 1000;
+const DAY_MS = 24 * HOUR_MS;
 const RETROACTIVE_GRACE_DAYS = 7;
+const UPDATED_AT_MAX_AHEAD_HOURS = 24;
 const LIVE_TIMEOUT_MS = 15_000;
 const LIVE_MAX_BODY_BYTES = 64 * 1024;
 
 const canonical = (value) => `${JSON.stringify(value, null, 2)}\n`;
 const time = (timestamp) => Date.parse(timestamp);
+// Only meaningful for strings already matching the schema's timestamp pattern (`…:SSZ`).
 const isInstant = (timestamp) => new Date(timestamp).toJSON() === timestamp.replace("Z", ".000Z");
 const label = (key, index) => `keys[${index}] (${key.fingerprint.slice(0, 12)}…)`;
 const isOpen = (key, now) =>
@@ -52,12 +55,16 @@ const toPem = (der) =>
 function parseKey(pem) {
   const key = createPublicKey(pem);
   if (key.asymmetricKeyType !== "ec") throw new Error(`not an EC key (${key.asymmetricKeyType})`);
+  // Degenerate points (e.g. the point at infinity) load but make `asymmetricKeyDetails` and the
+  // JWK export abort the process with a native assertion; the DER export rejects them cleanly.
+  key.export({ format: "der", type: "spki" });
   const curve = CURVES[key.asymmetricKeyDetails.namedCurve];
   if (curve === undefined) throw new Error(`unsupported curve ${key.asymmetricKeyDetails.namedCurve}`);
   const { x, y } = key.export({ format: "jwk" });
+  // SEC1 compressed form: 02 for even y, 03 for odd y, followed by x.
   const yBytes = Buffer.from(y, "base64url");
   const point = Buffer.concat([Buffer.from([2 + (yBytes.at(-1) & 1)]), Buffer.from(x, "base64url")]);
-  return { curve, point, canonicalPem: toPem(Buffer.concat([SPKI_PREFIX[curve], point])) };
+  return { curve: curve.name, point, canonicalPem: toPem(Buffer.concat([curve.spkiPrefix, point])) };
 }
 
 function describeSchemaError({ instancePath, message, params }) {
@@ -86,14 +93,17 @@ function checkTimestamps(doc) {
 }
 
 // Each rule below takes { raw, doc, base, now } and returns a list of error messages. They may
-// assume `doc` matches the strict schema and every timestamp is a real instant.
+// assume `doc` and `base` match the strict and published schema respectively and that every
+// timestamp in both is a real instant.
 
 function checkFormatting({ raw, doc }) {
   return raw === canonical(doc) ? [] : ["file is not canonically formatted (2-space indent, trailing newline)"];
 }
 
 function checkUpdatedAt({ doc, now }) {
-  return time(doc.updatedAt) > now + DAY_MS ? [`updatedAt ${doc.updatedAt} is more than 24h in the future`] : [];
+  return time(doc.updatedAt) > now + UPDATED_AT_MAX_AHEAD_HOURS * HOUR_MS
+    ? [`updatedAt ${doc.updatedAt} is more than ${UPDATED_AT_MAX_AHEAD_HOURS}h in the future`]
+    : [];
 }
 
 function checkUniqueFingerprints({ doc }) {
@@ -134,9 +144,9 @@ function checkKeys({ doc }) {
 
 /**
  * Change rules against the previous version: entries are append-only, identity fields are
- * immutable, an already-closed window may only be shortened, nothing is dated more than
- * RETROACTIVE_GRACE_DAYS into the past, and `updatedAt` never moves backwards and is bumped
- * whenever `keys` changed.
+ * immutable, an already-closed window may only be shortened, no new `validFrom` or changed
+ * `validUntil` is dated more than RETROACTIVE_GRACE_DAYS into the past, and `updatedAt` never
+ * moves backwards and is bumped whenever anything else changed.
  */
 function checkChanges({ doc, base, now }) {
   if (base === undefined) return [];
@@ -157,11 +167,10 @@ function checkChanges({ doc, base, now }) {
       if (key[field] !== old[field]) errors.push(`${label(key, i)}: ${field} changed; it is immutable once published`);
     }
     const wasClosed = old.validUntil !== null && time(old.validUntil) <= now;
-    if (wasClosed) {
-      if (key.validUntil === null || time(key.validUntil) > time(old.validUntil)) {
-        errors.push(`${label(key, i)}: validUntil ${old.validUntil} has passed and can only be moved earlier`);
-      }
-    } else if (key.validUntil !== null && time(key.validUntil) < earliest) {
+    if (wasClosed && (key.validUntil === null || time(key.validUntil) > time(old.validUntil))) {
+      errors.push(`${label(key, i)}: validUntil ${old.validUntil} has passed and can only be moved earlier`);
+    }
+    if (key.validUntil !== old.validUntil && key.validUntil !== null && time(key.validUntil) < earliest) {
       errors.push(
         `${label(key, i)}: validUntil ${key.validUntil} is ${retroactive}; this retroactively invalidates proofs and cannot be undone`,
       );
@@ -174,10 +183,11 @@ function checkChanges({ doc, base, now }) {
     }
   }
 
+  const withoutUpdatedAt = ({ updatedAt, ...rest }) => canonical(rest);
   if (time(doc.updatedAt) < time(base.updatedAt)) {
     errors.push(`updatedAt ${doc.updatedAt} is before the previous version's ${base.updatedAt}`);
-  } else if (canonical(doc.keys) !== canonical(base.keys) && time(doc.updatedAt) === time(base.updatedAt)) {
-    errors.push(`keys changed but updatedAt ${doc.updatedAt} was not bumped; set it to the current UTC time`);
+  } else if (withoutUpdatedAt(doc) !== withoutUpdatedAt(base) && time(doc.updatedAt) === time(base.updatedAt)) {
+    errors.push(`list changed but updatedAt ${doc.updatedAt} was not bumped; set it to the current UTC time`);
   }
   return errors;
 }
@@ -206,7 +216,9 @@ export function validate(raw, { base, now = Date.now() } = {}) {
   if (base !== undefined) {
     const parsed = parseJson(base, "previous version");
     if (parsed.error !== undefined) return [parsed.error];
-    if (!matchesPublishedSchema(parsed.doc)) return ["previous version does not match the schema; change rules cannot run"];
+    if (!matchesPublishedSchema(parsed.doc) || checkTimestamps(parsed.doc).length > 0) {
+      return ["previous version does not match the schema; change rules cannot run"];
+    }
     baseDoc = parsed.doc;
   }
 
@@ -228,11 +240,12 @@ async function readBody(response, limit) {
 async function probeNotary(url, key, name, fetch) {
   let response;
   try {
-    response = await fetch(url, { signal: AbortSignal.timeout(LIVE_TIMEOUT_MS) });
+    response = await fetch(url, { signal: AbortSignal.timeout(LIVE_TIMEOUT_MS), redirect: "error" });
   } catch (cause) {
     return `${name}: ${url} unreachable: ${cause.message}`;
   }
   if (!response.ok) return `${name}: ${url} returned HTTP ${response.status}`;
+  if (response.body === null) return `${name}: ${url} returned an empty body`;
   let body;
   try {
     body = await readBody(response, LIVE_MAX_BODY_BYTES);

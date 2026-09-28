@@ -6,8 +6,14 @@
   "type": "object",
   "required": ["schemaVersion", "updatedAt", "fingerprintAlgorithm", "keys"],
   "properties": {
-    "schemaVersion": { "const": 1 },
-    "updatedAt": { "$ref": "#/$defs/timestamp" },
+    "schemaVersion": {
+      "const": 1,
+      "description": "Bumped only for changes that affect the verifier rule."
+    },
+    "updatedAt": {
+      "$ref": "#/$defs/timestamp",
+      "description": "When this version of the list was published."
+    },
     "fingerprintAlgorithm": {
       "const": "sha256 over compressed SEC1 public key, lowercase hex"
     },
@@ -37,10 +43,17 @@
           "description": "Compressed-point SubjectPublicKeyInfo PEM, byte-identical to the notary's GET /info publicKey.",
           "pattern": "^-----BEGIN PUBLIC KEY-----\\n([A-Za-z0-9+/=]+\\n)+-----END PUBLIC KEY-----\\n$"
         },
-        "curve": { "enum": ["secp256k1", "secp256r1"] },
-        "validFrom": { "$ref": "#/$defs/timestamp" },
+        "curve": {
+          "enum": ["secp256k1", "secp256r1"],
+          "description": "Curve of the key, SEC 2 name."
+        },
+        "validFrom": {
+          "$ref": "#/$defs/timestamp",
+          "description": "Start of the window in which the key signed proofs (inclusive). Immutable once published."
+        },
         "validUntil": {
-          "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/timestamp" }]
+          "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/timestamp" }],
+          "description": "End of the window (exclusive), or null while no end is set. Accept a proof only if validFrom <= tlsTimestamp < validUntil."
         },
         "meta": {
           "type": "object",

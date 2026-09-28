@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
-import { checkLive, validate } from "./rules.js";
+import { CURVES, checkLive, validate } from "./rules.js";
 
 // Fixtures are frozen here rather than read from the committed list, so that editing the list
 // never breaks the validator's own tests. The reference time is fixed; `RECENT` is inside the
@@ -11,6 +11,12 @@ const RECENT = "2026-09-28T00:00:00Z";
 const PAST = "2026-01-01T00:00:00Z";
 const FUTURE = "2027-01-01T00:00:00Z";
 const BUMPED = { updatedAt: "2026-09-30T00:00:00Z" };
+const time = Date.parse;
+const at = (ms) => new Date(ms).toISOString().replace(".000Z", "Z");
+const SECOND = 1000;
+const HOUR = 60 * 60 * SECOND;
+const DAY = 24 * HOUR;
+const GRACE_EDGE = at(NOW - 7 * DAY);
 
 const KEY = {
   fingerprint: "a7e62d7f17aa7a22c26bdb93b7ce9400e826ffb2c6f54e54d2ded015677499af",
@@ -45,6 +51,8 @@ const P256 = {
 const ED25519_PEM = "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAJg74j33enoHb3BSx6aNgl7nTQzDus+JoHDxI9/gzjHs=\n-----END PUBLIC KEY-----\n";
 const P384_PEM =
   "-----BEGIN PUBLIC KEY-----\nMHYwEAYHKoZIzj0CAQYFK4EEACIDYgAERAVYS0YoyeTEGAW04+Pawg8ogeI0+JqI\n98crnO8GUDpldZwRdVRuwJI+L2SwOuRxKhiBWe9DHhNU6+GPgNoc4Icaq6DTzbfh\ng7D437He82CWAchvPoidvGEvDXY1Xn4E\n-----END PUBLIC KEY-----\n";
+// secp256k1 SubjectPublicKeyInfo whose point is the single byte 00: the point at infinity.
+const INFINITY_PEM = "-----BEGIN PUBLIC KEY-----\nMBYwEAYHKoZIzj0CAQYFK4EEAAoDAgAA\n-----END PUBLIC KEY-----\n";
 
 const FIXTURE = {
   schemaVersion: 1,
@@ -97,9 +105,16 @@ describe("content rules", () => {
   });
   it("rejects compact formatting", () => assertRejects(JSON.stringify(FIXTURE), /not canonically formatted/));
   it("rejects a missing trailing newline", () => assertRejects(list().trimEnd(), /not canonically formatted/));
-  it("rejects updatedAt far in the future", () => assertRejects(list({ updatedAt: FUTURE }), /updatedAt .* in the future/));
+  it("accepts updatedAt up to 24h in the future and rejects beyond", () => {
+    assertAccepts(list({ updatedAt: at(NOW + 24 * HOUR) }));
+    assertRejects(list({ updatedAt: at(NOW + 24 * HOUR + SECOND) }), /updatedAt .* is more than 24h in the future/);
+  });
   it("rejects a wrong fingerprint", () => assertRejects(withKey({ fingerprint: OTHER.fingerprint }), /fingerprint is .* but sha256/));
   it("rejects a wrong curve", () => assertRejects(withKey({ curve: "secp256r1" }), /curve is secp256r1 but publicKeyPem is secp256k1/));
+  it("rejects a secp256r1 key labelled secp256k1 or with a secp256k1 fingerprint", () => {
+    assertRejects(list({}, [{ ...P256, curve: "secp256k1" }]), /curve is secp256k1 but publicKeyPem is secp256r1/);
+    assertRejects(list({}, [{ ...P256, fingerprint: KEY.fingerprint }]), /fingerprint is .* but sha256/);
+  });
   it("rejects an uncompressed PEM and shows the expected one", () => {
     const [found] = errors(withKey({ publicKeyPem: UNCOMPRESSED_PEM }));
     assert.match(found, /compressed-point/);
@@ -114,9 +129,16 @@ describe("content rules", () => {
   });
   it("rejects a non-EC key", () => assertRejects(withKey({ publicKeyPem: ED25519_PEM }), /does not parse: not an EC key \(ed25519\)/));
   it("rejects an unsupported curve", () => assertRejects(withKey({ publicKeyPem: P384_PEM }), /does not parse: unsupported curve secp384r1/));
+  it("rejects the point at infinity", () => assertRejects(withKey({ publicKeyPem: INFINITY_PEM }), /does not parse: .*invalid form/));
   it("accepts a secp256r1 key", () => assertAccepts(list({}, [P256])));
-  it("rejects validUntil before validFrom", () => {
+  it("supports exactly the curves the schema allows", () => {
+    const schema = JSON.parse(readFileSync(new URL("../schema.json", import.meta.url), "utf8"));
+    assert.deepEqual(schema.$defs.key.properties.curve.enum.sort(), Object.values(CURVES).map((curve) => curve.name).sort());
+  });
+  it("rejects validUntil not after validFrom", () => {
     assertRejects(withKey({ validUntil: "2024-01-01T00:00:00Z" }), /validUntil .* not after validFrom/);
+    assertRejects(withKey({ validUntil: KEY.validFrom }), /validUntil .* not after validFrom/);
+    assertAccepts(withKey({ validUntil: at(time(KEY.validFrom) + SECOND) }));
   });
   it("rejects duplicate fingerprints", () => assertRejects(list({}, [KEY, KEY]), /duplicate fingerprint, first seen at keys\[0\]/));
   it("accepts several distinct keys", () => assertAccepts(list({}, [KEY, OTHER, P256])));
@@ -130,20 +152,26 @@ describe("change rules", () => {
   it("rejects a previous version that does not match the schema", () => {
     assertRejects(list(), /previous version does not match the schema/, against("{}\n"));
   });
+  it("rejects a previous version with a timestamp that is not an instant", () => {
+    assertRejects(list(), /previous version does not match the schema/, against(withKey({ validUntil: "2026-02-30T00:00:00Z" })));
+  });
   it("accepts a new key with an updatedAt bump", () => assertAccepts(list(BUMPED, [KEY, OTHER]), against()));
   it("accepts a new key whose window opens in the future", () => {
     assertAccepts(list(BUMPED, [KEY, { ...OTHER, validFrom: FUTURE }]), against());
   });
   it("rejects a new key backdated beyond the grace period", () => {
-    const backdated = list(BUMPED, [KEY, { ...OTHER, validFrom: PAST }]);
-    assertRejects(backdated, /keys\[1\] .*: new entry with validFrom .* more than 7 days in the past/, against());
+    const backdated = (validFrom) => list(BUMPED, [KEY, { ...OTHER, validFrom }]);
+    assertAccepts(backdated(GRACE_EDGE), against());
+    assertRejects(backdated(at(time(GRACE_EDGE) - SECOND)), /keys\[1\] .*: new entry with validFrom .* more than 7 days in the past/, against());
+    assertRejects(backdated(PAST), /keys\[1\] .*: new entry with validFrom .* more than 7 days in the past/, against());
   });
   it("rejects a change to keys without an updatedAt bump", () => {
-    assertRejects(list({}, [KEY, OTHER]), /keys changed but updatedAt .* was not bumped/, against());
+    assertRejects(list({}, [KEY, OTHER]), /list changed but updatedAt .* was not bumped/, against());
   });
   it("rejects a meta-only change without an updatedAt bump", () => {
-    assertRejects(withKey({ meta: { notaryUrls: ["https://new.example.com"] } }), /keys changed but updatedAt/, against());
+    assertRejects(withKey({ meta: { notaryUrls: ["https://new.example.com"] } }), /list changed but updatedAt/, against());
   });
+  it("accepts an updatedAt bump by itself", () => assertAccepts(list(BUMPED), against()));
   it("rejects updatedAt moving backwards", () => {
     assertRejects(list({ updatedAt: PAST }), /updatedAt .* is before the previous version's/, against());
   });
@@ -158,20 +186,32 @@ describe("change rules", () => {
       assert.ok(found.some((e) => e.includes(`${field} changed; it is immutable`)), found.join("\n"));
     });
   }
+  const retroactive = /validUntil .* is more than 7 days in the past; this retroactively invalidates proofs/;
   describe("window already closed at the previous version", () => {
-    const closed = against(withKey({ validUntil: PAST }));
+    const CLOSED_AT = "2026-09-29T00:00:00Z";
+    const closed = against(withKey({ validUntil: CLOSED_AT }));
     it("rejects reopening it", () => assertRejects(withKey({ validUntil: null }, BUMPED), /has passed and can only be moved earlier/, closed));
-    it("rejects extending it", () => {
-      assertRejects(withKey({ validUntil: "2026-02-01T00:00:00Z" }, BUMPED), /has passed and can only be moved earlier/, closed);
+    it("rejects extending it, even by a second", () => {
+      assertRejects(withKey({ validUntil: FUTURE }, BUMPED), /has passed and can only be moved earlier/, closed);
+      assertRejects(withKey({ validUntil: at(time(CLOSED_AT) + SECOND) }, BUMPED), /has passed and can only be moved earlier/, closed);
     });
-    it("accepts shortening it", () => assertAccepts(withKey({ validUntil: "2025-12-01T00:00:00Z" }, BUMPED), closed));
+    it("treats a window closing exactly now as closed", () => {
+      assertRejects(withKey({ validUntil: null }, BUMPED), /has passed and can only be moved earlier/, against(withKey({ validUntil: at(NOW) })));
+    });
+    it("accepts shortening it within the grace period", () => assertAccepts(withKey({ validUntil: RECENT }, BUMPED), closed));
+    it("rejects shortening it beyond the grace period", () => {
+      assertRejects(withKey({ validUntil: PAST }, BUMPED), retroactive, closed);
+      assertRejects(withKey({ validUntil: "2025-12-01T00:00:00Z" }, BUMPED), retroactive, against(withKey({ validUntil: PAST })));
+    });
+    it("accepts leaving a long-closed window alone", () => assertAccepts(withKey({ validUntil: PAST }, BUMPED), against(withKey({ validUntil: PAST }))));
   });
   it("accepts closing an open window in the future or within the grace period", () => {
     assertAccepts(withKey({ validUntil: FUTURE }, BUMPED), against());
     assertAccepts(withKey({ validUntil: RECENT }, BUMPED), against());
+    assertAccepts(withKey({ validUntil: GRACE_EDGE }, BUMPED), against());
   });
   it("rejects closing an open window beyond the grace period", () => {
-    const retroactive = /validUntil .* is more than 7 days in the past; this retroactively invalidates proofs/;
+    assertRejects(withKey({ validUntil: at(time(GRACE_EDGE) - SECOND) }, BUMPED), retroactive, against());
     assertRejects(withKey({ validUntil: PAST }, BUMPED), retroactive, against());
     assertRejects(withKey({ validUntil: PAST }, BUMPED), retroactive, against(withKey({ validUntil: FUTURE })));
   });
@@ -179,6 +219,7 @@ describe("change rules", () => {
     const base = against(withKey({ validUntil: FUTURE }));
     assertAccepts(withKey({ validUntil: null }, BUMPED), base);
     assertAccepts(withKey({ validUntil: "2028-01-01T00:00:00Z" }, BUMPED), base);
+    assertAccepts(withKey({ validUntil: null }, BUMPED), against(withKey({ validUntil: at(NOW + SECOND) })));
   });
 });
 
@@ -204,8 +245,21 @@ describe("live check", () => {
     assert.match(found[0], /serves a different publicKey/);
     assert.match(found[1], /unreachable: ECONNREFUSED/);
   });
+  it("warns when the served PEM differs only in whitespace", async () => {
+    assert.match((await single(async () => json({ publicKey: KEY.publicKeyPem.trimEnd() })))[0], /serves a different publicKey/);
+  });
   it("warns on a non-2xx response", async () => {
     assert.match((await single(async () => new Response("", { status: 503 })))[0], /HTTP 503/);
+  });
+  it("warns on a redirect instead of following it", async () => {
+    const fetch = async (url, init) => {
+      assert.equal(init.redirect, "error");
+      throw new TypeError("fetch failed");
+    };
+    assert.match((await single(fetch))[0], /unreachable: fetch failed/);
+  });
+  it("warns on an empty body", async () => {
+    assert.match((await single(async () => new Response(null, { status: 200 })))[0], /returned an empty body/);
   });
   it("warns on a body that is not JSON", async () => {
     assert.match((await single(async () => new Response("<html>", { status: 200 })))[0], /did not return JSON/);
@@ -219,6 +273,15 @@ describe("live check", () => {
   it("skips keys whose window is closed or has not opened yet", async () => {
     const fetch = async () => assert.fail("must not fetch");
     assert.deepEqual(await warnings(withKey({ validUntil: PAST }), fetch), []);
+    assert.deepEqual(await warnings(withKey({ validUntil: at(NOW) }), fetch), []);
     assert.deepEqual(await warnings(withKey({ validFrom: FUTURE }), fetch), []);
+    assert.deepEqual(await warnings(withKey({ validFrom: at(NOW + SECOND) }), fetch), []);
+  });
+  it("probes keys whose window opens exactly now or closes a second later", async () => {
+    let probes = 0;
+    const fetch = async () => (probes++, json({ publicKey: KEY.publicKeyPem }));
+    assert.deepEqual(await single(fetch), []);
+    assert.deepEqual(await warnings(withKey({ validFrom: at(NOW), validUntil: at(NOW + SECOND), meta: { notaryUrls: [primaryUrl] } }), fetch), []);
+    assert.equal(probes, 2);
   });
 });
