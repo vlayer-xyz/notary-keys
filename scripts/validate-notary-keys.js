@@ -21,6 +21,7 @@ const LIST_LOOKALIKE = /^notary-keys\./i;
 // %3A and %2C.
 const escape = (message) => message.replaceAll("%", "%25").replaceAll("\r", "%0D").replaceAll("\n", "%0A");
 const escapeProperty = (value) => escape(value).replaceAll(":", "%3A").replaceAll(",", "%2C");
+
 function report(level, file, message) {
   const line = process.env.GITHUB_ACTIONS
     ? `::${level}${file === undefined ? "" : ` file=${escapeProperty(file)}`}::${escape(message)}`

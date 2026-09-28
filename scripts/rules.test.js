@@ -3,9 +3,6 @@ import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
 import { CURVES, checkLive, validate } from "./rules.js";
 
-// Fixtures are frozen here rather than read from the committed list, so that editing the list
-// never breaks the validator's own tests. The reference time is fixed; `RECENT` is inside the
-// 7-day retroactive grace, `PAST` is well outside it and `FUTURE` is a year ahead.
 const NOW = Date.parse("2026-10-01T00:00:00Z");
 const RECENT = "2026-09-28T00:00:00Z";
 const PAST = "2026-01-01T00:00:00Z";

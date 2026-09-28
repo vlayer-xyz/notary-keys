@@ -26,9 +26,6 @@ const matchesStrictSchema = ajv.compile({
   },
 });
 
-// Supported curves, keyed by the OpenSSL name node:crypto reports. `name` is the SEC 2 name used
-// in the list (schema.json's `curve` enum must list exactly these), `spkiPrefix` the
-// SubjectPublicKeyInfo DER up to (excluding) the 33-byte compressed point.
 export const CURVES = {
   secp256k1: { name: "secp256k1", spkiPrefix: Buffer.from("3036301006072a8648ce3d020106052b8104000a032200", "hex") },
   prime256v1: {
