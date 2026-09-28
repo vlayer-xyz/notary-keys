@@ -21,11 +21,14 @@ jobs:
   # The key lists themselves. Kept separate from the validator's own tests so that a bad list
   # always surfaces as annotations from this job.
   validate-notary-keys:
+    # `edited` also fires on closed pull requests, where there is nothing left to check.
+    if: github.event_name != 'pull_request' || github.event.pull_request.state == 'open'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
       # Pull requests are compared against their base branch, pushes against the previous tip.
-      # A force-push to main makes the previous tip unreachable and fails the job on purpose.
+      # After a force-push to main whose previous tip is no longer reachable, the job fails on
+      # purpose rather than skipping the change rules.
       BASE: ${{ github.event_name == 'pull_request' && format('origin/{0}', github.base_ref) || github.event.before }}
       # The live check fetches the notary URLs listed in the PR; not for URLs chosen by a fork.
       LIVE_FLAG: ${{ (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository) && '--live' || '' }}
@@ -40,9 +43,11 @@ jobs:
           node-version-file: .nvmrc
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: pnpm validate --base "$BASE" $LIVE_FLAG
+      # $LIVE_FLAG is deliberately unquoted: when empty it must expand to no argument at all.
+      - run: pnpm validate --base "$BASE" $LIVE_FLAG # shellcheck disable=SC2086
 
   test:
+    if: github.event_name != 'pull_request' || github.event.pull_request.state == 'open'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:

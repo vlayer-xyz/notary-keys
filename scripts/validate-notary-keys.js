@@ -33,6 +33,7 @@ const fail = (file, message) => {
   report("error", file, message);
   failed = true;
 };
+const describe = (cause) => String(cause?.message ?? cause).trim();
 
 // Anything thrown out of here is a setup problem (bad arguments, not in a git repository,
 // unknown --base ref, unreadable file) and must fail the run, but as an error line rather than a
@@ -43,7 +44,9 @@ try {
     allowPositionals: true,
   });
   const root = execFileSync("git", ["rev-parse", "--show-toplevel"], { encoding: "utf8", stdio: "pipe" }).trim();
-  const git = (...args) => execFileSync("git", args, { cwd: root, encoding: "utf8", stdio: "pipe" });
+  const git = (...args) => execFileSync("git", args, { cwd: root, stdio: "pipe", maxBuffer: 64 * 1024 * 1024 });
+  // Rejects invalid UTF-8 instead of substituting U+FFFD, which `JSON.parse` would accept.
+  const decode = (bytes) => new TextDecoder("utf-8", { fatal: true }).decode(bytes);
   const lists = (names) => names.filter((name) => LIST_FILE.test(name));
   // A symlink or directory in place of a list is neither a valid list nor "still present".
   const isRegularFile = (file) => lstatSync(join(root, file), { throwIfNoEntry: false })?.isFile() === true;
@@ -54,7 +57,7 @@ try {
     values.base === undefined
       ? []
       : lists(
-          git("ls-tree", "--end-of-options", values.base)
+          decode(git("ls-tree", "--end-of-options", values.base))
             .split("\n")
             .flatMap((line) => (/^100(644|755) blob /.test(line) ? [line.slice(line.indexOf("\t") + 1)] : [])),
         );
@@ -66,24 +69,31 @@ try {
   const removed = baseFiles.filter((file) => !isRegularFile(file));
   removed.forEach((file) => fail(file, `removed or not a regular file; key lists are never deleted or renamed`));
 
+  const summary = (file, errors) => `${file}: ${errors === 0 ? "OK" : `${errors} error(s)`}`;
   for (const file of files) {
     if (removed.includes(file)) continue;
     if (!isRegularFile(file)) {
       fail(file, "not a regular file");
       continue;
     }
-    const raw = readFileSync(join(root, file), "utf8");
-    const base = baseFiles.includes(file) ? git("show", "--end-of-options", `${values.base}:${file}`) : undefined;
-    if (values.base !== undefined && base === undefined) report("warning", file, `not present at ${values.base}; change rules skipped`);
-    const errors = validate(raw, { base });
-    errors.forEach((error) => fail(file, error));
-    if (values.live && errors.length === 0) {
-      const warnings = await checkLive(raw);
-      warnings.forEach((warning) => report("warning", file, warning));
+    // A failure here is specific to this file (unreadable, not UTF-8, pathological content); the
+    // remaining lists are still checked.
+    try {
+      const raw = decode(readFileSync(join(root, file)));
+      const base = baseFiles.includes(file) ? decode(git("show", "--end-of-options", `${values.base}:${file}`)) : undefined;
+      if (values.base !== undefined && base === undefined) report("warning", file, `not present at ${values.base}; change rules skipped`);
+      const errors = validate(raw, { base });
+      errors.forEach((error) => fail(file, error));
+      if (values.live && errors.length === 0) {
+        const warnings = await checkLive(raw);
+        warnings.forEach((warning) => report("warning", file, warning));
+      }
+      console.log(process.env.GITHUB_ACTIONS ? escape(summary(file, errors.length)) : summary(file, errors.length));
+    } catch (cause) {
+      fail(file, describe(cause));
     }
-    console.log(`${file}: ${errors.length === 0 ? "OK" : `${errors.length} error(s)`}`);
   }
 } catch (cause) {
-  fail(undefined, String(cause?.message ?? cause).trim());
+  fail(undefined, describe(cause));
 }
 process.exitCode = failed ? 1 : 0;

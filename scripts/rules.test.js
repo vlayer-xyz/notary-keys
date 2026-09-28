@@ -105,9 +105,9 @@ describe("content rules", () => {
   });
   it("rejects compact formatting", () => assertRejects(JSON.stringify(FIXTURE), /not canonically formatted/));
   it("rejects a missing trailing newline", () => assertRejects(list().trimEnd(), /not canonically formatted/));
-  it("accepts updatedAt up to 24h in the future and rejects beyond", () => {
-    assertAccepts(list({ updatedAt: at(NOW + 24 * HOUR) }));
-    assertRejects(list({ updatedAt: at(NOW + 24 * HOUR + SECOND) }), /updatedAt .* is more than 24h in the future/);
+  it("accepts updatedAt up to 1h in the future and rejects beyond", () => {
+    assertAccepts(list({ updatedAt: at(NOW + HOUR) }));
+    assertRejects(list({ updatedAt: at(NOW + HOUR + SECOND) }), /updatedAt .* is more than 1h in the future/);
   });
   it("rejects a wrong fingerprint", () => assertRejects(withKey({ fingerprint: OTHER.fingerprint }), /fingerprint is .* but sha256/));
   it("rejects a wrong curve", () => assertRejects(withKey({ curve: "secp256r1" }), /curve is secp256r1 but publicKeyPem is secp256k1/));
@@ -186,13 +186,25 @@ describe("change rules", () => {
   for (const [field, value] of [
     ["publicKeyPem", OTHER.publicKeyPem],
     ["curve", "secp256r1"],
-    ["validFrom", PAST],
   ]) {
     it(`rejects a change to ${field}`, () => {
       const found = errors(withKey({ [field]: value }, BUMPED), against());
       assert.ok(found.some((e) => e.includes(`${field} changed; it is immutable`)), found.join("\n"));
     });
   }
+  it("rejects a change to validFrom once the window has opened", () => {
+    assertRejects(withKey({ validFrom: PAST }, BUMPED), /validFrom .* has passed and is immutable/, against());
+    assertRejects(withKey({ validFrom: FUTURE }, BUMPED), /validFrom .* has passed and is immutable/, against());
+    assertRejects(withKey({ validFrom: PAST }, BUMPED), /validFrom .* has passed and is immutable/, against(withKey({ validFrom: at(NOW) })));
+  });
+  it("accepts correcting validFrom while the window has not opened, within the grace period", () => {
+    const scheduled = against(withKey({ validFrom: FUTURE, validUntil: null }));
+    assertAccepts(withKey({ validFrom: "2027-02-01T00:00:00Z" }, BUMPED), scheduled);
+    assertAccepts(withKey({ validFrom: RECENT }, BUMPED), scheduled);
+    assertAccepts(withKey({ validFrom: GRACE_EDGE }, BUMPED), scheduled);
+    assertRejects(withKey({ validFrom: PAST }, BUMPED), /validFrom .* more than 7 days in the past; entries cannot be backdated/, scheduled);
+    assertAccepts(withKey({ validFrom: RECENT }, BUMPED), against(withKey({ validFrom: at(NOW + SECOND) })));
+  });
   const retroactive = /validUntil .* is more than 7 days in the past; this retroactively invalidates proofs/;
   describe("window already closed at the previous version", () => {
     const CLOSED_AT = "2026-09-29T00:00:00Z";
@@ -258,12 +270,17 @@ describe("live check", () => {
   it("warns on a non-2xx response", async () => {
     assert.match((await single(async () => new Response("", { status: 503 })))[0], /HTTP 503/);
   });
-  it("warns on a redirect instead of following it", async () => {
+  it("warns on a redirect instead of following it, naming the underlying cause", async () => {
     const fetch = async (url, init) => {
       assert.equal(init.redirect, "error");
-      throw new TypeError("fetch failed");
+      throw new TypeError("fetch failed", { cause: new Error("unexpected redirect") });
     };
-    assert.match((await single(fetch))[0], /unreachable: fetch failed/);
+    assert.match((await single(fetch))[0], /unreachable: unexpected redirect/);
+  });
+  it("gives up on a body that stalls past the timeout", async () => {
+    const stalled = () => new Response(new ReadableStream({ start: (controller) => controller.enqueue(new Uint8Array([123])) }), { status: 200 });
+    const found = await checkLive(withKey({ meta: { notaryUrls: [primaryUrl] } }), { now: NOW, fetch: async () => stalled(), timeoutMs: 50 });
+    assert.match(found[0], /body could not be read: .*timeout/i);
   });
   it("warns on an empty body", async () => {
     assert.match((await single(async () => new Response(null, { status: 200 })))[0], /returned an empty body/);

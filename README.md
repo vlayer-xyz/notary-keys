@@ -45,7 +45,7 @@ version is available at `https://raw.githubusercontent.com/vlayer-xyz/notary-key
 | `keys[].fingerprint` | Primary identifier of the key. Equals `notaryKeyFingerprint` returned by the [vlayer verify API](https://platform.vlayer.xyz/server-side/rest-api/verify). |
 | `keys[].publicKeyPem` | The key as a compressed-point SubjectPublicKeyInfo PEM, byte-identical to the `publicKey` field of the notary's `GET /info`. |
 | `keys[].curve` | `secp256k1` or `secp256r1`. |
-| `keys[].validFrom` | Start of the window in which the key signed proofs (inclusive). Immutable once published: if a planned cutover slips, the entry keeps the earlier `validFrom`, which is harmless because no proof exists from before the key was actually used. |
+| `keys[].validFrom` | Start of the window in which the key signed proofs (inclusive). Immutable once it has passed; while it is still in the future it may be corrected. If a planned cutover slips, the entry may keep the earlier `validFrom`, which is harmless because no proof exists from before the key was actually used. |
 | `keys[].validUntil` | *Mutable*. End of the window (exclusive), or `null` when the key doesn't have end of validity set yet. Set when the key is rotated out or is going to be rotated out. |
 | `keys[].meta` | Informational only. Verifiers must not base any decision on it. `notaryUrls` lists the origins of the notaries signing with the key; `GET <origin>/info` serves the key. |
 
@@ -116,14 +116,14 @@ against the previous version of each list. It fails on:
 - a list that does not match `schema.json`, has a field outside those described
   (except inside `meta`), lacks `meta.notaryUrls`, or is not formatted as
   `JSON.stringify(doc, null, 2)` with a trailing newline;
-- a timestamp that is not a real UTC instant, an `updatedAt` more than 24 h in the
+- a timestamp that is not a real UTC instant, an `updatedAt` more than 1 h in the
   future, a `validUntil` not after `validFrom`, or two entries with the same `fingerprint`;
 - a `fingerprint`, `curve` or `publicKeyPem` that does not match the key itself
   (`publicKeyPem` must be the compressed-point form the notary serves, byte for byte);
-- a removed or renamed list, a removed entry, or a change to `publicKeyPem`, `curve`
-  or `validFrom`;
+- a removed or renamed list, a removed entry, a change to `publicKeyPem` or `curve`, or
+  a change to a `validFrom` that has already passed;
 - a `validUntil` that had already passed being moved later or back to `null`;
-- a new entry's `validFrom`, or any change to a `validUntil`, more than 7 days in the
+- a new or changed `validFrom`, or any change to a `validUntil`, more than 7 days in the
   past — the list cannot be backdated, and a retroactive close cannot be undone. A key
   compromise that needs a deeper cut changes the grace period in
   [`scripts/rules.js`](scripts/rules.js) in the same pull request, where reviewers see it;

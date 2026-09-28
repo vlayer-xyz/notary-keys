@@ -110,17 +110,34 @@ describe("validate-notary-keys CLI", () => {
     assert.match(stderr, new RegExp(`^::error file=${FILE}::file is not canonically formatted`, "m"));
     assert.match(stdout, new RegExp(`^${FILE}: 1 error\\(s\\)$`, "m"));
   });
-  it("escapes newlines in annotation messages", () => {
-    write("{\n\n");
+  it("escapes newlines and percent signs in annotation messages", () => {
+    write(bumped(production, { "a\nb%": 1 }));
     const { stderr } = run([], { annotations: true });
-    assert.match(stderr, /^::error file=.*::file is not valid JSON: [^\n]*$/m);
+    assert.match(stderr, /^::error file=.*::schema: <root> has unknown field "a%0Ab%25"$/m);
+  });
+  it("rejects a list that is not valid UTF-8 and keeps checking the other lists", () => {
+    writeFileSync(join(repo, FILE), Buffer.concat([Buffer.from(production.slice(0, -3)), Buffer.from([0xff]), Buffer.from(production.slice(-3))]));
+    write(production, "notary-keys.other.json");
+    const { status, stdout, stderr } = run([]);
+    assert.equal(status, 1);
+    assert.match(stderr, new RegExp(`^ERROR ${FILE}: The encoded data was not valid for encoding utf-8$`, "m"));
+    assert.match(stdout, /^notary-keys\.other\.json: OK$/m);
+  });
+  it("reports a list the validator cannot process and keeps checking the other lists", () => {
+    const deep = `${"[".repeat(200_000)}${"]".repeat(200_000)}`;
+    write(`${JSON.stringify({ ...JSON.parse(production), keys: [{ ...JSON.parse(production).keys[0], meta: { notaryUrls: ["https://x.example"], deep: "PLACEHOLDER" } }] }, null, 2).replace('"PLACEHOLDER"', deep)}\n`);
+    write(production, "notary-keys.other.json");
+    const { status, stdout, stderr } = run([]);
+    assert.equal(status, 1);
+    assert.match(stderr, new RegExp(`^ERROR ${FILE}: `, "m"));
+    assert.match(stdout, /^notary-keys\.other\.json: OK$/m);
   });
   it("enforces the change rules against --base", () => {
     write(withKey(production, { validFrom: "2024-11-27T00:00:00Z" }));
     assert.equal(run([]).status, 0);
     const { status, stderr } = run(["--base", "HEAD"]);
     assert.equal(status, 1);
-    assert.match(stderr, new RegExp(`^ERROR ${FILE}: keys\\[0\\] .*: validFrom changed; it is immutable once published$`, "m"));
+    assert.match(stderr, new RegExp(`^ERROR ${FILE}: keys\\[0\\] .*: validFrom .* has passed and is immutable$`, "m"));
   });
   it("probes the notaries with --live and reports them as warnings", () => {
     write(withKey(production, { meta: { notaryUrls: ["https://127.0.0.1:1"] } }));

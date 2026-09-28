@@ -33,11 +33,11 @@ export const CURVES = {
   secp256k1: { name: "secp256k1", spkiPrefix: Buffer.from("3036301006072a8648ce3d020106052b8104000a032200", "hex") },
   prime256v1: { name: "secp256r1", spkiPrefix: Buffer.from("3039301306072a8648ce3d020106082a8648ce3d030107032200", "hex") },
 };
-const IMMUTABLE = ["publicKeyPem", "curve", "validFrom"];
+const IMMUTABLE = ["publicKeyPem", "curve"];
 const HOUR_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * HOUR_MS;
 const RETROACTIVE_GRACE_DAYS = 7;
-const UPDATED_AT_MAX_AHEAD_HOURS = 24;
+const UPDATED_AT_MAX_AHEAD_HOURS = 1;
 const LIVE_TIMEOUT_MS = 15_000;
 const LIVE_MAX_BODY_BYTES = 64 * 1024;
 
@@ -144,9 +144,10 @@ function checkKeys({ doc }) {
 
 /**
  * Change rules against the previous version: entries are append-only, identity fields are
- * immutable, an already-closed window may only be shortened, no new `validFrom` or changed
- * `validUntil` is dated more than RETROACTIVE_GRACE_DAYS into the past, and `updatedAt` never
- * moves backwards and is set to a recent time whenever anything else changed.
+ * immutable, a window's `validFrom` is immutable once it has opened, an already-closed window
+ * may only be shortened, no changed `validFrom` or `validUntil` is dated more than
+ * RETROACTIVE_GRACE_DAYS into the past, and `updatedAt` never moves backwards and is set to a
+ * recent time whenever anything else changed.
  */
 function checkChanges({ doc, base, now }) {
   if (base === undefined) return [];
@@ -165,6 +166,13 @@ function checkChanges({ doc, base, now }) {
     }
     for (const field of IMMUTABLE) {
       if (key[field] !== old[field]) errors.push(`${label(key, i)}: ${field} changed; it is immutable once published`);
+    }
+    if (key.validFrom !== old.validFrom) {
+      if (time(old.validFrom) <= now) {
+        errors.push(`${label(key, i)}: validFrom ${old.validFrom} has passed and is immutable`);
+      } else if (time(key.validFrom) < earliest) {
+        errors.push(`${label(key, i)}: validFrom ${key.validFrom} is ${retroactive}; entries cannot be backdated`);
+      }
     }
     const wasClosed = old.validUntil !== null && time(old.validUntil) <= now;
     if (wasClosed && (key.validUntil === null || time(key.validUntil) > time(old.validUntil))) {
@@ -233,28 +241,42 @@ export function validate(raw, { base, now = Date.now() } = {}) {
   return [checkFormatting, checkUpdatedAt, checkUniqueFingerprints, checkKeys, checkChanges].flatMap((rule) => rule(context));
 }
 
-async function readBody(response, limit) {
-  const chunks = [];
-  let size = 0;
-  for await (const chunk of response.body) {
-    size += chunk.length;
-    if (size > limit) throw new Error(`body exceeds ${limit} bytes`);
-    chunks.push(chunk);
+// The signal is wired to the reader explicitly: once headers have arrived, fetch's own abort
+// handling of the body is not guaranteed to fire.
+async function readBody(body, limit, signal) {
+  const reader = body.getReader();
+  const abort = () => reader.cancel(signal.reason).catch(() => {});
+  signal.addEventListener("abort", abort, { once: true });
+  try {
+    const chunks = [];
+    let size = 0;
+    for (let chunk = await reader.read(); !chunk.done; chunk = await reader.read()) {
+      size += chunk.value.length;
+      if (size > limit) {
+        await reader.cancel();
+        throw new Error(`body exceeds ${limit} bytes`);
+      }
+      chunks.push(chunk.value);
+    }
+    if (signal.aborted) throw signal.reason;
+    return Buffer.concat(chunks).toString("utf8");
+  } finally {
+    signal.removeEventListener("abort", abort);
   }
-  return Buffer.concat(chunks).toString("utf8");
 }
 
-async function probeNotary(url, key, name, fetch) {
+async function probeNotary(url, key, name, fetch, timeoutMs) {
+  const signal = AbortSignal.timeout(timeoutMs);
   let response;
   try {
-    response = await fetch(url, { signal: AbortSignal.timeout(LIVE_TIMEOUT_MS), redirect: "error" });
+    response = await fetch(url, { signal, redirect: "error" });
   } catch (cause) {
-    return `${name}: ${url} unreachable: ${cause.message}`;
+    return `${name}: ${url} unreachable: ${cause.cause?.message ?? cause.message}`;
   }
   if (!response.ok) return `${name}: ${url} returned HTTP ${response.status}`;
   let body = "";
   try {
-    if (response.body !== null) body = await readBody(response, LIVE_MAX_BODY_BYTES);
+    if (response.body !== null) body = await readBody(response.body, LIVE_MAX_BODY_BYTES, signal);
   } catch (cause) {
     return `${name}: ${url} body could not be read: ${cause.message}`;
   }
@@ -271,10 +293,10 @@ async function probeNotary(url, key, name, fetch) {
  * Expects `raw` to have passed `validate`.
  * @returns {Promise<string[]>} warning messages
  */
-export async function checkLive(raw, { now = Date.now(), fetch = globalThis.fetch } = {}) {
+export async function checkLive(raw, { now = Date.now(), fetch = globalThis.fetch, timeoutMs = LIVE_TIMEOUT_MS } = {}) {
   const { keys } = JSON.parse(raw);
   const probes = keys.flatMap((key, i) =>
-    isOpen(key, now) ? key.meta.notaryUrls.map((url) => probeNotary(`${url}/info`, key, label(key, i), fetch)) : [],
+    isOpen(key, now) ? key.meta.notaryUrls.map((url) => probeNotary(`${url}/info`, key, label(key, i), fetch, timeoutMs)) : [],
   );
   return (await Promise.all(probes)).filter((warning) => warning !== null);
 }
