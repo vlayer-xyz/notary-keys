@@ -260,6 +260,7 @@ describe("live check", () => {
   });
   it("warns on an empty body", async () => {
     assert.match((await single(async () => new Response(null, { status: 200 })))[0], /returned an empty body/);
+    assert.match((await single(async () => new Response("", { status: 200 })))[0], /returned an empty body/);
   });
   it("warns on a body that is not JSON", async () => {
     assert.match((await single(async () => new Response("<html>", { status: 200 })))[0], /did not return JSON/);

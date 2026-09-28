@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -50,17 +50,41 @@ describe("validate-notary-keys CLI", () => {
     assert.equal(status, 1);
     assert.match(stderr, /ERROR: no notary-keys\.<env>\.json found/);
   });
-  it("ignores directories and oddly named files that look like lists", () => {
-    mkdirSync(join(repo, "notary-keys.dir.json"));
+  it("ignores oddly named files that look like lists", () => {
     write("{", "notary-keys.a,b:c.json");
     const { status, stdout } = run([]);
     assert.equal(status, 0, stdout);
     assert.match(stdout, new RegExp(`^${FILE}: OK$`, "m"));
   });
-  it("fails with an error line, not a stack trace, for an unreadable positional file", () => {
+  it("fails on a list that is a directory or a symlink", () => {
+    mkdirSync(join(repo, "notary-keys.dir.json"));
+    write("{}", "elsewhere.json");
+    symlinkSync("elsewhere.json", join(repo, "notary-keys.link.json"));
+    const { status, stdout, stderr } = run([]);
+    assert.equal(status, 1);
+    assert.match(stderr, /^ERROR notary-keys\.dir\.json: not a regular file$/m);
+    assert.match(stderr, /^ERROR notary-keys\.link\.json: not a regular file$/m);
+    assert.match(stdout, new RegExp(`^${FILE}: OK$`, "m"));
+  });
+  it("fails when a list present at --base was replaced by a symlink, even if another list was added", () => {
+    write(production, "notary-keys.other.json");
+    unlinkSync(join(repo, FILE));
+    symlinkSync("notary-keys.other.json", join(repo, FILE));
+    const { status, stderr } = run(["--base", "HEAD"]);
+    assert.equal(status, 1);
+    assert.match(stderr, new RegExp(`^ERROR ${FILE}: removed or not a regular file; key lists are never deleted or renamed$`, "m"));
+    assert.equal(stderr.match(/^ERROR/gm).length, 1, stderr);
+  });
+  it("fails with an error line, not a stack trace, for a missing positional file", () => {
     const { status, stderr } = run(["no-such.json"]);
     assert.equal(status, 1);
-    assert.match(stderr, /^ERROR: ENOENT.*no-such\.json/m);
+    assert.match(stderr, /^ERROR no-such\.json: not a regular file$/m);
+    assert.doesNotMatch(stderr, /^\s+at /m);
+  });
+  it("fails with an error line for bad arguments", () => {
+    const { status, stderr } = run(["--nope"]);
+    assert.equal(status, 1);
+    assert.match(stderr, /^ERROR: Unknown option '--nope'/m);
     assert.doesNotMatch(stderr, /^\s+at /m);
   });
   it("escapes the file name in annotations", () => {
@@ -102,7 +126,12 @@ describe("validate-notary-keys CLI", () => {
     write(production, "notary-keys.other.json");
     const { status, stderr } = run(["--base", "HEAD"]);
     assert.equal(status, 1);
-    assert.match(stderr, new RegExp(`^ERROR ${FILE}: removed; key lists are never deleted or renamed$`, "m"));
+    assert.match(stderr, new RegExp(`^ERROR ${FILE}: removed or not a regular file; key lists are never deleted or renamed$`, "m"));
+  });
+  it("rejects a --base that looks like a git option", () => {
+    const { status, stderr } = run(["--base=-r"]);
+    assert.equal(status, 1);
+    assert.match(stderr, /^ERROR: Command failed: git ls-tree .*\nfatal: Not a valid object name -r$/m);
   });
   it("fails when a list was renamed, and only warns for the new name", () => {
     renameSync(join(repo, FILE), join(repo, "notary-keys.renamed.json"));

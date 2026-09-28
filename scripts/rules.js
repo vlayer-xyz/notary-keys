@@ -245,13 +245,13 @@ async function probeNotary(url, key, name, fetch) {
     return `${name}: ${url} unreachable: ${cause.message}`;
   }
   if (!response.ok) return `${name}: ${url} returned HTTP ${response.status}`;
-  if (response.body === null) return `${name}: ${url} returned an empty body`;
-  let body;
+  let body = "";
   try {
-    body = await readBody(response, LIVE_MAX_BODY_BYTES);
+    if (response.body !== null) body = await readBody(response, LIVE_MAX_BODY_BYTES);
   } catch (cause) {
     return `${name}: ${url} body could not be read: ${cause.message}`;
   }
+  if (body === "") return `${name}: ${url} returned an empty body`;
   const { doc: info, error } = parseJson(body, "response");
   if (error !== undefined) return `${name}: ${url} did not return JSON`;
   if (typeof info?.publicKey !== "string") return `${name}: ${url} response has no publicKey field`;
