@@ -149,11 +149,11 @@ describe("change rules", () => {
 
   it("accepts an unchanged list", () => assertAccepts(list(), against()));
   it("rejects a previous version that is not JSON", () => assertRejects(list(), /previous version is not valid JSON/, against("{")));
-  it("rejects a previous version that does not match the schema", () => {
-    assertRejects(list(), /previous version does not match the schema/, against("{}\n"));
-  });
-  it("rejects a previous version with a timestamp that is not an instant", () => {
-    assertRejects(list(), /previous version does not match the schema/, against(withKey({ validUntil: "2026-02-30T00:00:00Z" })));
+  it("rejects a previous version that is not a valid list", () => {
+    const invalid = /previous version is not a valid list; change rules cannot run/;
+    assertRejects(list(), invalid, against("{}\n"));
+    assertRejects(list(), invalid, against(withKey({ validUntil: "2026-02-30T00:00:00Z" })));
+    assertRejects(list(), invalid, against(list({}, [KEY, { ...KEY, validFrom: PAST }])));
   });
   it("accepts a new key with an updatedAt bump", () => assertAccepts(list(BUMPED, [KEY, OTHER]), against()));
   it("accepts a new key whose window opens in the future", () => {

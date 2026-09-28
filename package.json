@@ -4,7 +4,7 @@
   "type": "module",
   "description": "Validation for the vlayer notary key lists served at https://keys.vlayer.xyz",
   "engines": {
-    "node": ">=22"
+    "node": ">=24"
   },
   "packageManager": "pnpm@12.6.0",
   "scripts": {

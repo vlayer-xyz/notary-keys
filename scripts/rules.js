@@ -216,8 +216,12 @@ export function validate(raw, { base, now = Date.now() } = {}) {
   if (base !== undefined) {
     const parsed = parseJson(base, "previous version");
     if (parsed.error !== undefined) return [parsed.error];
-    if (!matchesPublishedSchema(parsed.doc) || checkTimestamps(parsed.doc).length > 0) {
-      return ["previous version does not match the schema; change rules cannot run"];
+    if (
+      !matchesPublishedSchema(parsed.doc) ||
+      checkTimestamps(parsed.doc).length > 0 ||
+      checkUniqueFingerprints({ doc: parsed.doc }).length > 0
+    ) {
+      return ["previous version is not a valid list; change rules cannot run"];
     }
     baseDoc = parsed.doc;
   }

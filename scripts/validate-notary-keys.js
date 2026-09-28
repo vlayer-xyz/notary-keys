@@ -13,6 +13,9 @@ import { parseArgs } from "node:util";
 import { checkLive, validate } from "./rules.js";
 
 const LIST_FILE = /^notary-keys\.[a-z0-9-]+\.json$/;
+// Anything else at the root that starts like a list is a mistake (wrong case, a stray backup):
+// GitHub Pages would serve it unvalidated.
+const LIST_LOOKALIKE = /^notary-keys\./i;
 
 // GitHub workflow commands unescape these in the message; properties (file=) additionally use
 // %3A and %2C.
@@ -44,11 +47,22 @@ try {
   const lists = (names) => names.filter((name) => LIST_FILE.test(name));
   // A symlink or directory in place of a list is neither a valid list nor "still present".
   const isRegularFile = (file) => lstatSync(join(root, file), { throwIfNoEntry: false })?.isFile() === true;
-  const files = positionals.length > 0 ? positionals.map((file) => relative(root, resolve(file))) : lists(readdirSync(root));
+  const rootEntries = readdirSync(root);
+  const files = positionals.length > 0 ? positionals.map((file) => relative(root, resolve(file))) : lists(rootEntries);
+  // `<mode> <type> <hash>\t<name>`; only regular-file blobs count as lists at the base.
   const baseFiles =
-    values.base === undefined ? [] : lists(git("ls-tree", "--name-only", "--end-of-options", values.base).split("\n"));
+    values.base === undefined
+      ? []
+      : lists(
+          git("ls-tree", "--end-of-options", values.base)
+            .split("\n")
+            .flatMap((line) => (/^100(644|755) blob /.test(line) ? [line.slice(line.indexOf("\t") + 1)] : [])),
+        );
 
   if (files.length === 0) fail(undefined, `no notary-keys.<env>.json found in ${root}`);
+  for (const name of rootEntries) {
+    if (LIST_LOOKALIKE.test(name) && !LIST_FILE.test(name)) fail(name, "looks like a key list but is not named notary-keys.<env>.json");
+  }
   const removed = baseFiles.filter((file) => !isRegularFile(file));
   removed.forEach((file) => fail(file, `removed or not a regular file; key lists are never deleted or renamed`));
 
@@ -70,6 +84,6 @@ try {
     console.log(`${file}: ${errors.length === 0 ? "OK" : `${errors.length} error(s)`}`);
   }
 } catch (cause) {
-  fail(undefined, cause.message.trim());
+  fail(undefined, String(cause?.message ?? cause).trim());
 }
 process.exitCode = failed ? 1 : 0;

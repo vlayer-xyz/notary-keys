@@ -11,9 +11,11 @@ on:
 permissions:
   contents: read
 
+# Superseded PR runs are cancelled; every push to main is validated, since each run only covers
+# the diff from the previous tip.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   # The key lists themselves. Kept separate from the validator's own tests so that a bad list
@@ -26,7 +28,7 @@ jobs:
       # A force-push to main makes the previous tip unreachable and fails the job on purpose.
       BASE: ${{ github.event_name == 'pull_request' && format('origin/{0}', github.base_ref) || github.event.before }}
       # The live check fetches the notary URLs listed in the PR; not for URLs chosen by a fork.
-      LIVE_FLAG: ${{ github.event.pull_request.head.repo.fork != true && '--live' || '' }}
+      LIVE_FLAG: ${{ (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository) && '--live' || '' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

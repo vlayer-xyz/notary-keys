@@ -50,11 +50,17 @@ describe("validate-notary-keys CLI", () => {
     assert.equal(status, 1);
     assert.match(stderr, /ERROR: no notary-keys\.<env>\.json found/);
   });
-  it("ignores oddly named files that look like lists", () => {
-    write("{", "notary-keys.a,b:c.json");
+  it("fails on files that look like lists but are not named notary-keys.<env>.json", () => {
+    for (const name of ["notary-keys.Production.json", "notary-keys.production.json.bak", "notary-keys.a,b:c.json"]) write("{", name);
+    const { status, stdout, stderr } = run([]);
+    assert.equal(status, 1);
+    assert.equal(stderr.match(/^ERROR .*: looks like a key list but is not named notary-keys\.<env>\.json$/gm).length, 3, stderr);
+    assert.match(stdout, new RegExp(`^${FILE}: OK$`, "m"));
+  });
+  it("ignores unrelated files", () => {
+    write("{", "keys.json");
     const { status, stdout } = run([]);
     assert.equal(status, 0, stdout);
-    assert.match(stdout, new RegExp(`^${FILE}: OK$`, "m"));
   });
   it("fails on a list that is a directory or a symlink", () => {
     mkdirSync(join(repo, "notary-keys.dir.json"));
@@ -113,13 +119,25 @@ describe("validate-notary-keys CLI", () => {
   it("fails loudly on an unknown base ref", () => {
     const { status, stderr } = run(["--base", "no-such-ref"]);
     assert.equal(status, 1);
-    assert.match(stderr, /^ERROR: .*no-such-ref/m);
+    assert.match(stderr, /^ERROR: Command failed: git ls-tree .*no-such-ref/m);
     assert.doesNotMatch(stderr, /^\s+at /m);
   });
   it("fails loudly on the all-zeros base of a newly created branch", () => {
     const { status, stderr } = run(["--base", "0".repeat(40)]);
     assert.equal(status, 1);
-    assert.match(stderr, /^ERROR: Command failed: git ls-tree .*\nfatal: not a tree object$/m);
+    assert.match(stderr, new RegExp(`^ERROR: Command failed: git ls-tree .*${"0".repeat(40)}`, "m"));
+  });
+  it("treats a list that was a symlink at --base as absent there", () => {
+    write(production, "real.json");
+    unlinkSync(join(repo, FILE));
+    symlinkSync("real.json", join(repo, FILE));
+    git("add", "-A");
+    git("commit", "-q", "-m", "symlink");
+    unlinkSync(join(repo, FILE));
+    write(production);
+    const { status, stdout } = run(["--base", "HEAD"]);
+    assert.equal(status, 0, stdout);
+    assert.match(stdout, new RegExp(`^WARNING ${FILE}: not present at HEAD; change rules skipped$`, "m"));
   });
   it("fails when a list present at --base was deleted", () => {
     unlinkSync(join(repo, FILE));
@@ -131,7 +149,7 @@ describe("validate-notary-keys CLI", () => {
   it("rejects a --base that looks like a git option", () => {
     const { status, stderr } = run(["--base=-r"]);
     assert.equal(status, 1);
-    assert.match(stderr, /^ERROR: Command failed: git ls-tree .*\nfatal: Not a valid object name -r$/m);
+    assert.match(stderr, /^ERROR: Command failed: git ls-tree --end-of-options -r$/m);
   });
   it("fails when a list was renamed, and only warns for the new name", () => {
     renameSync(join(repo, FILE), join(repo, "notary-keys.renamed.json"));

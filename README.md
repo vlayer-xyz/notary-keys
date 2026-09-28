@@ -140,7 +140,8 @@ rotation is in progress.
 
 The check catches mistakes. It is not a defence against a malicious pull request,
 which could change the rules in the same diff: review changes under `scripts/`,
-`schema.json` and `.github/` with the same care as the key list itself.
+`schema.json`, `.github/`, `package.json`, `pnpm-lock.yaml` and the GitHub Pages
+files (`CNAME`, `index.html`, `.nojekyll`) with the same care as the key list itself.
 
 Locally, with the Node version from `.nvmrc` and the pnpm version from `package.json`
 (`nvm use && corepack enable`):
