@@ -47,7 +47,7 @@ try {
   const lists = (names) => names.filter((name) => LIST_FILE.test(name));
   // A symlink or directory in place of a list is neither a valid list nor "still present".
   const isRegularFile = (file) => lstatSync(join(root, file), { throwIfNoEntry: false })?.isFile() === true;
-  const rootEntries = readdirSync(root);
+  const rootEntries = readdirSync(root).sort();
   const files = positionals.length > 0 ? positionals.map((file) => relative(root, resolve(file))) : lists(rootEntries);
   // `<mode> <type> <hash>\t<name>`; only regular-file blobs count as lists at the base.
   const baseFiles =

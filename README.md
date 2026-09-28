@@ -106,7 +106,7 @@ you have been unable to refresh as stale.
   signing with it, before it actually happens. Do not remove the entry.
 
 Every change sets `updatedAt` to the current UTC time (`date -u +%FT%TZ`); a change
-that keeps the previous `updatedAt` is rejected.
+that keeps the previous `updatedAt`, or sets one more than 7 days old, is rejected.
 
 ## Validation
 
@@ -127,11 +127,12 @@ against the previous version of each list. It fails on:
   past — the list cannot be backdated, and a retroactive close cannot be undone. A key
   compromise that needs a deeper cut changes the grace period in
   [`scripts/rules.js`](scripts/rules.js) in the same pull request, where reviewers see it;
-- `updatedAt` moving backwards, or not moving when anything else changed.
+- `updatedAt` moving backwards, or, when anything else changed, not moving or being
+  more than 7 days old.
 
-The "already passed" and "in the past" rules are evaluated at the time the check runs.
-A pull request that touches `validUntil` should be re-run ("Re-run all jobs" on the
-check) right before merging if it has been open for a while.
+The "already passed", "in the past" and "old" rules are evaluated at the time the check
+runs. A pull request that has been open for more than a few days should have `updatedAt`
+refreshed and be re-run ("Re-run all jobs" on the check) right before merging.
 
 Additionally, for every key whose window is currently open, the notaries in
 `meta.notaryUrls` are queried and a `publicKey` that differs from `publicKeyPem` is

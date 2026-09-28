@@ -21,7 +21,12 @@ const run = (args, { annotations = false, cwd = repo } = {}) => {
   else delete env.GITHUB_ACTIONS;
   return spawnSync(process.execPath, [script, ...args], { cwd, env, encoding: "utf8" });
 };
-const bumped = (raw, patch) => `${JSON.stringify({ ...JSON.parse(raw), updatedAt: "2030-01-01T00:00:00Z", ...patch }, null, 2)}\n`;
+const now = () => new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
+const bumped = (raw, patch) => `${JSON.stringify({ ...JSON.parse(raw), updatedAt: now(), ...patch }, null, 2)}\n`;
+const withKey = (raw, patch) => {
+  const doc = JSON.parse(raw);
+  return bumped(raw, { keys: [{ ...doc.keys[0], ...patch }] });
+};
 
 beforeEach(() => {
   repo = mkdtempSync(join(tmpdir(), "notary-keys-"));
@@ -111,10 +116,18 @@ describe("validate-notary-keys CLI", () => {
     assert.match(stderr, /^::error file=.*::file is not valid JSON: [^\n]*$/m);
   });
   it("enforces the change rules against --base", () => {
-    write(bumped(production, { keys: [] }));
+    write(withKey(production, { validFrom: "2024-11-27T00:00:00Z" }));
+    assert.equal(run([]).status, 0);
     const { status, stderr } = run(["--base", "HEAD"]);
     assert.equal(status, 1);
-    assert.match(stderr, /must NOT have fewer than 1 items/);
+    assert.match(stderr, new RegExp(`^ERROR ${FILE}: keys\\[0\\] .*: validFrom changed; it is immutable once published$`, "m"));
+  });
+  it("probes the notaries with --live and reports them as warnings", () => {
+    write(withKey(production, { meta: { notaryUrls: ["https://127.0.0.1:1"] } }));
+    const { status, stdout } = run(["--live"], { annotations: true });
+    assert.equal(status, 0, stdout);
+    assert.match(stdout, new RegExp(`^::warning file=${FILE}::keys\\[0\\] .*: https://127\\.0\\.0\\.1:1/info unreachable: `, "m"));
+    assert.doesNotMatch(run([]).stdout, /warning/);
   });
   it("fails loudly on an unknown base ref", () => {
     const { status, stderr } = run(["--base", "no-such-ref"]);

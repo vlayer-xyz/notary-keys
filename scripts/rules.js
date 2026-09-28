@@ -146,7 +146,7 @@ function checkKeys({ doc }) {
  * Change rules against the previous version: entries are append-only, identity fields are
  * immutable, an already-closed window may only be shortened, no new `validFrom` or changed
  * `validUntil` is dated more than RETROACTIVE_GRACE_DAYS into the past, and `updatedAt` never
- * moves backwards and is bumped whenever anything else changed.
+ * moves backwards and is set to a recent time whenever anything else changed.
  */
 function checkChanges({ doc, base, now }) {
   if (base === undefined) return [];
@@ -184,10 +184,13 @@ function checkChanges({ doc, base, now }) {
   }
 
   const withoutUpdatedAt = ({ updatedAt, ...rest }) => canonical(rest);
+  const changed = withoutUpdatedAt(doc) !== withoutUpdatedAt(base);
   if (time(doc.updatedAt) < time(base.updatedAt)) {
     errors.push(`updatedAt ${doc.updatedAt} is before the previous version's ${base.updatedAt}`);
-  } else if (withoutUpdatedAt(doc) !== withoutUpdatedAt(base) && time(doc.updatedAt) === time(base.updatedAt)) {
+  } else if (changed && time(doc.updatedAt) === time(base.updatedAt)) {
     errors.push(`list changed but updatedAt ${doc.updatedAt} was not bumped; set it to the current UTC time`);
+  } else if (changed && time(doc.updatedAt) < earliest) {
+    errors.push(`list changed but updatedAt ${doc.updatedAt} is ${retroactive}; set it to the current UTC time`);
   }
   return errors;
 }

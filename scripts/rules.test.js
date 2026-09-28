@@ -172,6 +172,13 @@ describe("change rules", () => {
     assertRejects(withKey({ meta: { notaryUrls: ["https://new.example.com"] } }), /list changed but updatedAt/, against());
   });
   it("accepts an updatedAt bump by itself", () => assertAccepts(list(BUMPED), against()));
+  it("rejects a change with an updatedAt bump that is not recent", () => {
+    const stale = /list changed but updatedAt .* is more than 7 days in the past; set it to the current UTC time/;
+    assertRejects(list({ updatedAt: "2026-09-02T00:00:00Z" }, [KEY, OTHER]), stale, against());
+    assertRejects(list({ updatedAt: at(time(GRACE_EDGE) - SECOND) }, [KEY, OTHER]), stale, against());
+    assertAccepts(list({ updatedAt: GRACE_EDGE }, [KEY, OTHER]), against());
+    assertAccepts(list({ updatedAt: "2026-09-02T00:00:00Z" }), against());
+  });
   it("rejects updatedAt moving backwards", () => {
     assertRejects(list({ updatedAt: PAST }), /updatedAt .* is before the previous version's/, against());
   });
