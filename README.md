@@ -45,13 +45,17 @@ version is available at `https://raw.githubusercontent.com/vlayer-xyz/notary-key
 | `keys[].fingerprint` | Primary identifier of the key. Equals `notaryKeyFingerprint` returned by the [vlayer verify API](https://platform.vlayer.xyz/server-side/rest-api/verify). |
 | `keys[].publicKeyPem` | The key as a compressed-point SubjectPublicKeyInfo PEM, byte-identical to the `publicKey` field of the notary's `GET /info`. |
 | `keys[].curve` | `secp256k1` or `secp256r1`. |
-| `keys[].validFrom` | Start of the window in which the key signed proofs (inclusive). |
+| `keys[].validFrom` | Start of the window in which the key signed proofs (inclusive). Immutable once published: if a planned cutover slips, the entry keeps the earlier `validFrom`, which is harmless because no proof exists from before the key was actually used. |
 | `keys[].validUntil` | *Mutable*. End of the window (exclusive), or `null` when the key doesn't have end of validity set yet. Set when the key is rotated out or is going to be rotated out. |
-| `keys[].meta` | Informational only. Verifiers must not base any decision on it. `notaryUrls` lists the notaries signing with the key. |
+| `keys[].meta` | Informational only. Verifiers must not base any decision on it. `notaryUrls` lists the origins of the notaries signing with the key; `GET <origin>/info` serves the key. |
 
 Entries are never removed: a key that has been rotated out stays listed with its
 `validUntil` set, so proofs it signed remain verifiable. Several keys may have an
-open window at the same time. Unknown fields must be ignored.
+open window at the same time.
+
+Verifiers must ignore fields they don't recognise, at any level. The published
+`schema.json` describes only the fields above and accepts others; new fields never
+change the meaning of existing ones without a `schemaVersion` bump.
 
 ## Verifier rule
 
@@ -101,4 +105,45 @@ you have been unable to refresh as stale.
 - **Rotate a key out**: set its `validUntil` to the moment the last notary will stop
   signing with it, before it actually happens. Do not remove the entry.
 
-Every change bumps `updatedAt`.
+Every change sets `updatedAt` to the current UTC time (`date -u +%FT%TZ`); two
+versions with the same `updatedAt` are rejected.
+
+## Validation
+
+Every pull request and push to `main` runs the [validator](scripts/validate-notary-keys.js)
+against the previous version of each list. It fails on:
+
+- a list that does not match `schema.json`, has a field outside those described
+  (except inside `meta`), lacks `meta.notaryUrls`, or is not formatted as
+  `JSON.stringify(doc, null, 2)` with a trailing newline;
+- a `fingerprint`, `curve` or `publicKeyPem` that does not match the key itself
+  (`publicKeyPem` must be the compressed-point form the notary serves, byte for byte);
+- a removed or renamed list, a removed entry, or a change to `publicKeyPem`, `curve`
+  or `validFrom`;
+- a `validUntil` that had already passed being moved later or back to `null`;
+- a new entry's `validFrom`, or a `validUntil` newly set on an open window, more than
+  7 days in the past — the list cannot be backdated, and a retroactive close cannot be
+  undone. A key compromise that needs a deeper cut changes the grace period in
+  [`scripts/rules.js`](scripts/rules.js) in the same pull request, where reviewers see it;
+- `updatedAt` moving backwards, or not moving when `keys` changed.
+
+The "already passed" and "in the past" rules are evaluated at the time the check runs.
+A pull request that touches `validUntil` should be re-run right before merging if it
+has been open for a while.
+
+Additionally, for every key whose window is currently open, the notaries in
+`meta.notaryUrls` are queried and a `publicKey` that differs from `publicKeyPem` is
+reported as a warning. This never fails the check: a difference is expected while a
+rotation is in progress.
+
+The check catches mistakes. It is not a defence against a malicious pull request,
+which could change the rules in the same diff: review changes under `scripts/`,
+`schema.json` and `.github/` with the same care as the key list itself.
+
+Locally:
+
+```sh
+pnpm install
+pnpm test
+pnpm validate --base origin/main --live
+```

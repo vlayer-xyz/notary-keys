@@ -2,9 +2,8 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://keys.vlayer.xyz/schema.json",
   "title": "vlayer notary keys",
-  "description": "List of signing keys used by vlayer notaries. See https://github.com/vlayer-xyz/notary-keys#readme.",
+  "description": "List of signing keys used by vlayer notaries. Describes the fields verifiers rely on; fields not described here may appear and must be ignored. See https://github.com/vlayer-xyz/notary-keys#readme.",
   "type": "object",
-  "additionalProperties": false,
   "required": ["schemaVersion", "updatedAt", "fingerprintAlgorithm", "keys"],
   "properties": {
     "schemaVersion": { "const": 1 },
@@ -26,8 +25,7 @@
     },
     "key": {
       "type": "object",
-      "additionalProperties": false,
-      "required": ["fingerprint", "publicKeyPem", "curve", "validFrom", "validUntil", "meta"],
+      "required": ["fingerprint", "publicKeyPem", "curve", "validFrom", "validUntil"],
       "properties": {
         "fingerprint": {
           "type": "string",
@@ -47,13 +45,13 @@
         "meta": {
           "type": "object",
           "description": "Informational fields only; verifiers must not base decisions on them.",
-          "required": ["notaryUrls"],
           "properties": {
             "notaryUrls": {
               "type": "array",
+              "description": "Origins of the notaries signing with this key; GET <origin>/info serves the key.",
               "minItems": 1,
               "uniqueItems": true,
-              "items": { "type": "string", "pattern": "^https://[^/\\s]+$" }
+              "items": { "type": "string", "pattern": "^https://[A-Za-z0-9.-]+(:[0-9]+)?$" }
             }
           }
         }
