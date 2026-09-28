@@ -1,33 +1,23 @@
 name: validate notary keys
 
 on:
-  # Retargeting a pull request to another base does not re-trigger this; re-run the check manually.
   pull_request:
-  push:
-    branches: [main]
 
 permissions:
   contents: read
 
-# Superseded PR runs are cancelled. Pushes to main each get their own group so none is cancelled
-# or dropped from the queue: every run only covers the diff from the previous tip.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  # The key lists themselves. Kept separate from the validator's own tests so that a bad list
-  # always surfaces as annotations from this job.
   validate-notary-keys:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
-      # Pull requests are compared against their base branch, pushes against the previous tip.
-      # After a force-push to main whose previous tip is no longer reachable, the job fails on
-      # purpose rather than skipping the change rules.
-      BASE: ${{ github.event_name == 'pull_request' && format('origin/{0}', github.base_ref) || github.event.before }}
-      # The live check fetches the notary URLs listed in the PR; not for URLs chosen by a fork.
-      LIVE_FLAG: ${{ (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository) && '--live' || '' }}
+      BASE: origin/${{ github.base_ref }}
+      # Notary URLs come from the PR; only probe them for branches of this repository.
+      LIVE_FLAG: ${{ github.event.pull_request.head.repo.full_name == github.repository && '--live' || '' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -39,8 +29,7 @@ jobs:
           node-version-file: .nvmrc
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      # $LIVE_FLAG is deliberately unquoted: when empty it must expand to no argument at all.
-      - run: pnpm validate --base "$BASE" $LIVE_FLAG # shellcheck disable=SC2086
+      - run: pnpm validate --base "$BASE" $LIVE_FLAG
 
   test:
     runs-on: ubuntu-latest

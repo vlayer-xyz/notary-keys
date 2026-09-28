@@ -110,8 +110,8 @@ that keeps the previous `updatedAt`, or sets one more than 7 days old, is reject
 
 ## Validation
 
-Every pull request and push to `main` runs the [validator](scripts/validate-notary-keys.js)
-against the previous version of each list. It fails on:
+Every pull request runs the [validator](scripts/validate-notary-keys.js) against the
+version of each list on the base branch. It fails on:
 
 - a list that does not match `schema.json`, has a field outside those described
   (except inside `meta`), lacks `meta.notaryUrls`, or is not formatted as
