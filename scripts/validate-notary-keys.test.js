@@ -1,6 +1,15 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  symlinkSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -20,7 +29,11 @@ const seed = `${JSON.stringify(
   2,
 )}\n`;
 let repo;
-const git = (...args) => execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.com", ...args], { cwd: repo, encoding: "utf8" });
+const git = (...args) =>
+  execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.com", ...args], {
+    cwd: repo,
+    encoding: "utf8",
+  });
 const write = (contents, file = FILE) => writeFileSync(join(repo, file), contents);
 const run = (args, { annotations = false, cwd = repo } = {}) => {
   const env = { ...process.env };
@@ -63,10 +76,15 @@ describe("validate-notary-keys CLI", () => {
     assert.match(stderr, /ERROR: no notary-keys\.<env>\.json found/);
   });
   it("fails on files that look like lists but are not named notary-keys.<env>.json", () => {
-    for (const name of ["notary-keys.Production.json", "notary-keys.production.json.bak", "notary-keys.a,b:c.json"]) write("{", name);
+    for (const name of ["notary-keys.Production.json", "notary-keys.production.json.bak", "notary-keys.a,b:c.json"])
+      write("{", name);
     const { status, stdout, stderr } = run([]);
     assert.equal(status, 1);
-    assert.equal(stderr.match(/^ERROR .*: looks like a key list but is not named notary-keys\.<env>\.json$/gm).length, 3, stderr);
+    assert.equal(
+      stderr.match(/^ERROR .*: looks like a key list but is not named notary-keys\.<env>\.json$/gm).length,
+      3,
+      stderr,
+    );
     assert.match(stdout, new RegExp(`^${FILE}: OK$`, "m"));
   });
   it("ignores unrelated files", () => {
@@ -90,7 +108,10 @@ describe("validate-notary-keys CLI", () => {
     symlinkSync("notary-keys.other.json", join(repo, FILE));
     const { status, stderr } = run(["--base", "HEAD"]);
     assert.equal(status, 1);
-    assert.match(stderr, new RegExp(`^ERROR ${FILE}: removed or not a regular file; key lists are never deleted or renamed$`, "m"));
+    assert.match(
+      stderr,
+      new RegExp(`^ERROR ${FILE}: removed or not a regular file; key lists are never deleted or renamed$`, "m"),
+    );
     assert.equal(stderr.match(/^ERROR/gm).length, 1, stderr);
   });
   it("fails with an error line, not a stack trace, for a missing positional file", () => {
@@ -123,7 +144,10 @@ describe("validate-notary-keys CLI", () => {
     assert.match(stderr, /^::error file=.*::schema: <root> has unknown field "a%0Ab%25"$/m);
   });
   it("rejects a list that is not valid UTF-8 and keeps checking the other lists", () => {
-    writeFileSync(join(repo, FILE), Buffer.concat([Buffer.from(seed.slice(0, -3)), Buffer.from([0xff]), Buffer.from(seed.slice(-3))]));
+    writeFileSync(
+      join(repo, FILE),
+      Buffer.concat([Buffer.from(seed.slice(0, -3)), Buffer.from([0xff]), Buffer.from(seed.slice(-3))]),
+    );
     write(seed, "notary-keys.other.json");
     const { status, stdout, stderr } = run([]);
     assert.equal(status, 1);
@@ -132,7 +156,9 @@ describe("validate-notary-keys CLI", () => {
   });
   it("reports a list the validator cannot process and keeps checking the other lists", () => {
     const deep = `${"[".repeat(200_000)}${"]".repeat(200_000)}`;
-    write(`${JSON.stringify({ ...JSON.parse(seed), keys: [{ ...JSON.parse(seed).keys[0], meta: { notaryUrls: ["https://x.example"], deep: "PLACEHOLDER" } }] }, null, 2).replace('"PLACEHOLDER"', deep)}\n`);
+    write(
+      `${JSON.stringify({ ...JSON.parse(seed), keys: [{ ...JSON.parse(seed).keys[0], meta: { notaryUrls: ["https://x.example"], deep: "PLACEHOLDER" } }] }, null, 2).replace('"PLACEHOLDER"', deep)}\n`,
+    );
     write(seed, "notary-keys.other.json");
     const { status, stdout, stderr } = run([]);
     assert.equal(status, 1);
@@ -181,7 +207,10 @@ describe("validate-notary-keys CLI", () => {
     write(seed, "notary-keys.other.json");
     const { status, stderr } = run(["--base", "HEAD"]);
     assert.equal(status, 1);
-    assert.match(stderr, new RegExp(`^ERROR ${FILE}: removed or not a regular file; key lists are never deleted or renamed$`, "m"));
+    assert.match(
+      stderr,
+      new RegExp(`^ERROR ${FILE}: removed or not a regular file; key lists are never deleted or renamed$`, "m"),
+    );
   });
   it("rejects a --base that looks like a git option", () => {
     const { status, stderr } = run(["--base=-r"]);

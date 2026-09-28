@@ -64,7 +64,8 @@ try {
 
   if (files.length === 0) fail(undefined, `no notary-keys.<env>.json found in ${root}`);
   for (const name of rootEntries) {
-    if (LIST_LOOKALIKE.test(name) && !LIST_FILE.test(name)) fail(name, "looks like a key list but is not named notary-keys.<env>.json");
+    if (LIST_LOOKALIKE.test(name) && !LIST_FILE.test(name))
+      fail(name, "looks like a key list but is not named notary-keys.<env>.json");
   }
   const removed = baseFiles.filter((file) => !isRegularFile(file));
   removed.forEach((file) => fail(file, `removed or not a regular file; key lists are never deleted or renamed`));
@@ -80,8 +81,11 @@ try {
     // remaining lists are still checked.
     try {
       const raw = decode(readFileSync(join(root, file)));
-      const base = baseFiles.includes(file) ? decode(git("show", "--end-of-options", `${values.base}:${file}`)) : undefined;
-      if (values.base !== undefined && base === undefined) report("warning", file, `not present at ${values.base}; change rules skipped`);
+      const base = baseFiles.includes(file)
+        ? decode(git("show", "--end-of-options", `${values.base}:${file}`))
+        : undefined;
+      if (values.base !== undefined && base === undefined)
+        report("warning", file, `not present at ${values.base}; change rules skipped`);
       const errors = validate(raw, { base });
       errors.forEach((error) => fail(file, error));
       if (errors.length === 0) {

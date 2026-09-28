@@ -31,7 +31,10 @@ const matchesStrictSchema = ajv.compile({
 // SubjectPublicKeyInfo DER up to (excluding) the 33-byte compressed point.
 export const CURVES = {
   secp256k1: { name: "secp256k1", spkiPrefix: Buffer.from("3036301006072a8648ce3d020106052b8104000a032200", "hex") },
-  prime256v1: { name: "secp256r1", spkiPrefix: Buffer.from("3039301306072a8648ce3d020106082a8648ce3d030107032200", "hex") },
+  prime256v1: {
+    name: "secp256r1",
+    spkiPrefix: Buffer.from("3039301306072a8648ce3d020106082a8648ce3d030107032200", "hex"),
+  },
 };
 const IMMUTABLE = ["publicKeyPem", "curve"];
 const HOUR_MS = 60 * 60 * 1000;
@@ -46,10 +49,12 @@ const time = (timestamp) => Date.parse(timestamp);
 // Only meaningful for strings already matching the schema's timestamp pattern (`…:SSZ`).
 const isInstant = (timestamp) => new Date(timestamp).toJSON() === timestamp.replace("Z", ".000Z");
 const label = (key, index) => `keys[${index}] (${key.fingerprint.slice(0, 12)}…)`;
-const isOpen = (key, now) =>
-  time(key.validFrom) <= now && (key.validUntil === null || now < time(key.validUntil));
+const isOpen = (key, now) => time(key.validFrom) <= now && (key.validUntil === null || now < time(key.validUntil));
 const toPem = (der) =>
-  `-----BEGIN PUBLIC KEY-----\n${der.toString("base64").match(/.{1,64}/g).join("\n")}\n-----END PUBLIC KEY-----\n`;
+  `-----BEGIN PUBLIC KEY-----\n${der
+    .toString("base64")
+    .match(/.{1,64}/g)
+    .join("\n")}\n-----END PUBLIC KEY-----\n`;
 
 /** Curve, compressed SEC1 point and the canonical compressed-point SPKI PEM of a public key. */
 function parseKey(pem) {
@@ -133,7 +138,9 @@ function checkKeys({ doc }) {
     }
     if (key.publicKeyPem !== parsed.canonicalPem) {
       const expected = JSON.stringify(parsed.canonicalPem);
-      errors.push(`${label(key, i)}: publicKeyPem must be the compressed-point SPKI PEM as the notary's GET /info returns it: ${expected}`);
+      errors.push(
+        `${label(key, i)}: publicKeyPem must be the compressed-point SPKI PEM as the notary's GET /info returns it: ${expected}`,
+      );
     }
     if (key.validUntil !== null && time(key.validUntil) <= time(key.validFrom)) {
       errors.push(`${label(key, i)}: validUntil ${key.validUntil} is not after validFrom ${key.validFrom}`);
@@ -160,7 +167,9 @@ function checkChanges({ doc, base, now }) {
     const old = previous.get(key.fingerprint);
     if (old === undefined) {
       if (time(key.validFrom) < earliest) {
-        errors.push(`${label(key, i)}: new entry with validFrom ${key.validFrom} ${retroactive}; entries cannot be backdated`);
+        errors.push(
+          `${label(key, i)}: new entry with validFrom ${key.validFrom} ${retroactive}; entries cannot be backdated`,
+        );
       }
       return;
     }
@@ -238,7 +247,9 @@ export function validate(raw, { base, now = Date.now() } = {}) {
   }
 
   const context = { raw, doc, base: baseDoc, now };
-  return [checkFormatting, checkUpdatedAt, checkUniqueFingerprints, checkKeys, checkChanges].flatMap((rule) => rule(context));
+  return [checkFormatting, checkUpdatedAt, checkUniqueFingerprints, checkKeys, checkChanges].flatMap((rule) =>
+    rule(context),
+  );
 }
 
 // The signal is wired to the reader explicitly: once headers have arrived, fetch's own abort
@@ -296,7 +307,9 @@ async function probeNotary(url, key, name, fetch, timeoutMs) {
 export async function checkLive(raw, { now = Date.now(), fetch = globalThis.fetch, timeoutMs = LIVE_TIMEOUT_MS } = {}) {
   const { keys } = JSON.parse(raw);
   const probes = keys.flatMap((key, i) =>
-    isOpen(key, now) ? key.meta.notaryUrls.map((url) => probeNotary(`${url}/info`, key, label(key, i), fetch, timeoutMs)) : [],
+    isOpen(key, now)
+      ? key.meta.notaryUrls.map((url) => probeNotary(`${url}/info`, key, label(key, i), fetch, timeoutMs))
+      : [],
   );
   return (await Promise.all(probes)).filter((warning) => warning !== null);
 }
