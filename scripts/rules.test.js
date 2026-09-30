@@ -1,6 +1,16 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
+import {
+  ED25519_PEM,
+  FIXTURE,
+  INFINITY_PEM,
+  P384_PEM,
+  SECP256K1_OTHER,
+  SECP256R1,
+  UNCOMPRESSED_PEM,
+  serialize,
+} from "./fixtures.js";
 import { CURVES, checkLive, validate } from "./rules.js";
 
 const NOW = Date.parse("2026-10-01T00:00:00Z");
@@ -15,53 +25,16 @@ const HOUR = 60 * 60 * SECOND;
 const DAY = 24 * HOUR;
 const GRACE_EDGE = at(NOW - 7 * DAY);
 
-const KEY = {
-  fingerprint: "a7e62d7f17aa7a22c26bdb93b7ce9400e826ffb2c6f54e54d2ded015677499af",
-  publicKeyPem:
-    "-----BEGIN PUBLIC KEY-----\nMDYwEAYHKoZIzj0CAQYFK4EEAAoDIgAC1Mu6mQsMLrHdRbKcfSYHUpnx6jkxfzUU\nDm73HnA77ac=\n-----END PUBLIC KEY-----\n",
-  curve: "secp256k1",
-  validFrom: "2024-11-28T00:00:00Z",
-  validUntil: null,
-  meta: { notaryUrls: ["https://notary.example.com", "https://legacy.example.com"] },
-};
-// KEY's point in uncompressed (04‖x‖y) SubjectPublicKeyInfo form.
-const UNCOMPRESSED_PEM =
-  "-----BEGIN PUBLIC KEY-----\nMFYwEAYHKoZIzj0CAQYFK4EEAAoDQgAE1Mu6mQsMLrHdRbKcfSYHUpnx6jkxfzUU\nDm73HnA77acXaF7sNQHVOPqtLYC1ldmYzWLpT/Pvtnja/1YTblMSMA==\n-----END PUBLIC KEY-----\n";
+const [KEY] = FIXTURE.keys;
 const OTHER = {
-  fingerprint: "6cff271c5511747721a2fbe2f1e7f5a9520241bf95d1afc72b34a70e144da0d7",
-  publicKeyPem:
-    "-----BEGIN PUBLIC KEY-----\nMDYwEAYHKoZIzj0CAQYFK4EEAAoDIgACZt/aZXbuq7OIL+cOSRqyG9jJTGtxPsPf\nFatke4wKM50=\n-----END PUBLIC KEY-----\n",
-  curve: "secp256k1",
+  ...SECP256K1_OTHER,
   validFrom: RECENT,
   validUntil: null,
   meta: { notaryUrls: ["https://other.example.com"] },
 };
+const P256 = { ...SECP256R1, validFrom: RECENT, validUntil: null, meta: { notaryUrls: ["https://p256.example.com"] } };
 
-const P256 = {
-  fingerprint: "4881d57e2983140922e2e6ff82a8debde60efe9dfe602b7cb790864fed74d45b",
-  publicKeyPem:
-    "-----BEGIN PUBLIC KEY-----\nMDkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDIgADu2+daX2o5/bkgvgRBPyUupnPSeQx\nH7QkhXnJ7SE6fzw=\n-----END PUBLIC KEY-----\n",
-  curve: "secp256r1",
-  validFrom: RECENT,
-  validUntil: null,
-  meta: { notaryUrls: ["https://p256.example.com"] },
-};
-
-const ED25519_PEM =
-  "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAJg74j33enoHb3BSx6aNgl7nTQzDus+JoHDxI9/gzjHs=\n-----END PUBLIC KEY-----\n";
-const P384_PEM =
-  "-----BEGIN PUBLIC KEY-----\nMHYwEAYHKoZIzj0CAQYFK4EEACIDYgAERAVYS0YoyeTEGAW04+Pawg8ogeI0+JqI\n98crnO8GUDpldZwRdVRuwJI+L2SwOuRxKhiBWe9DHhNU6+GPgNoc4Icaq6DTzbfh\ng7D437He82CWAchvPoidvGEvDXY1Xn4E\n-----END PUBLIC KEY-----\n";
-// secp256k1 SubjectPublicKeyInfo whose point is the single byte 00: the point at infinity.
-const INFINITY_PEM = "-----BEGIN PUBLIC KEY-----\nMBYwEAYHKoZIzj0CAQYFK4EEAAoDAgAA\n-----END PUBLIC KEY-----\n";
-
-const FIXTURE = {
-  schemaVersion: 1,
-  updatedAt: "2026-09-01T00:00:00Z",
-  fingerprintAlgorithm: "sha256 over compressed SEC1 public key, lowercase hex",
-  keys: [KEY],
-};
-
-const list = (patch = {}, keys = [KEY]) => `${JSON.stringify({ ...FIXTURE, ...patch, keys }, null, 2)}\n`;
+const list = (patch = {}, keys = [KEY]) => serialize({ ...FIXTURE, ...patch, keys });
 const withKey = (patch, listPatch = {}) => list(listPatch, [{ ...KEY, ...patch }]);
 const errors = (raw, options) => validate(raw, { now: NOW, ...options });
 const assertAccepts = (raw, options) => assert.deepEqual(errors(raw, options), []);

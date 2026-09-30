@@ -1,33 +1,22 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import {
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  renameSync,
-  rmSync,
-  symlinkSync,
-  unlinkSync,
-  writeFileSync,
-} from "node:fs";
+import { mkdirSync, mkdtempSync, renameSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, it } from "node:test";
+import { FIXTURE, serialize } from "./fixtures.js";
 
 const script = fileURLToPath(new URL("./validate-notary-keys.js", import.meta.url));
 const FILE = "notary-keys.test.json";
 const UNREACHABLE = "https://127.0.0.1:1";
 
-// Each test runs the CLI in a throwaway git repository whose only list is a copy of the
-// committed one, committed at HEAD, with its notaries pointed at a closed port so the live check
-// stays offline.
-const committed = JSON.parse(readFileSync(new URL("../notary-keys.production.json", import.meta.url), "utf8"));
-const seed = `${JSON.stringify(
-  { ...committed, keys: committed.keys.map((key) => ({ ...key, meta: { ...key.meta, notaryUrls: [UNREACHABLE] } })) },
-  null,
-  2,
-)}\n`;
+// Each test runs the CLI in a throwaway git repository whose only list is the fixture, committed
+// at HEAD, with its notary pointed at a closed port so the live check stays offline.
+const seed = serialize({
+  ...FIXTURE,
+  keys: FIXTURE.keys.map((key) => ({ ...key, meta: { ...key.meta, notaryUrls: [UNREACHABLE] } })),
+});
 
 let repo;
 const git = (...args) =>
@@ -45,7 +34,7 @@ const run = (args, { annotations = false, cwd = repo } = {}) => {
 };
 
 const now = () => new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
-const bumped = (raw, patch) => `${JSON.stringify({ ...JSON.parse(raw), updatedAt: now(), ...patch }, null, 2)}\n`;
+const bumped = (raw, patch) => serialize({ ...JSON.parse(raw), updatedAt: now(), ...patch });
 const withKey = (raw, patch) => {
   const doc = JSON.parse(raw);
   return bumped(raw, { keys: [{ ...doc.keys[0], ...patch }] });
