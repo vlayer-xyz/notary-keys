@@ -1,0 +1,104 @@
+#!/usr/bin/env node
+// Usage: node scripts/validate-notary-keys.js [--base GIT_REF] [FILE...]
+//
+// Validates every notary-keys.<env>.json at the repository root (or the given files, which need
+// not match that pattern). With --base, also enforces the change rules against the version of
+// each file at that git ref, and fails if a list present there is missing here. Valid lists are
+// cross-checked against each notary's GET /info; differences are warnings. Exits 1 if anything
+// has errors.
+import { execFileSync } from "node:child_process";
+import { lstatSync, readdirSync, readFileSync } from "node:fs";
+import { join, relative, resolve } from "node:path";
+import { parseArgs } from "node:util";
+import { checkLive, validate } from "./rules.js";
+
+const LIST_FILE = /^notary-keys\.[a-z0-9-]+\.json$/;
+// Anything else at the root that starts like a list is a mistake (wrong case, a stray backup):
+// GitHub Pages would serve it unvalidated.
+const LIST_LOOKALIKE = /^notary-keys\./i;
+
+// GitHub workflow commands unescape these in the message; properties (file=) additionally use
+// %3A and %2C.
+const escape = (message) => message.replaceAll("%", "%25").replaceAll("\r", "%0D").replaceAll("\n", "%0A");
+const escapeProperty = (value) => escape(value).replaceAll(":", "%3A").replaceAll(",", "%2C");
+
+function report(level, file, message) {
+  const line = process.env.GITHUB_ACTIONS
+    ? `::${level}${file === undefined ? "" : ` file=${escapeProperty(file)}`}::${escape(message)}`
+    : `${level.toUpperCase()}${file === undefined ? "" : ` ${file}`}: ${message}`;
+  (level === "error" ? console.error : console.log)(line);
+}
+
+let failed = false;
+const fail = (file, message) => {
+  report("error", file, message);
+  failed = true;
+};
+const describe = (cause) => String(cause?.message ?? cause).trim();
+
+// Anything thrown out of here is a setup problem (bad arguments, not in a git repository,
+// unknown --base ref, unreadable file) and must fail the run, but as an error line rather than a
+// stack trace.
+try {
+  const { values, positionals } = parseArgs({
+    options: { base: { type: "string" } },
+    allowPositionals: true,
+  });
+  const root = execFileSync("git", ["rev-parse", "--show-toplevel"], { encoding: "utf8", stdio: "pipe" }).trim();
+  const git = (...args) => execFileSync("git", args, { cwd: root, stdio: "pipe", maxBuffer: 64 * 1024 * 1024 });
+  // Rejects invalid UTF-8 instead of substituting U+FFFD, which `JSON.parse` would accept.
+  const decode = (bytes) => new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  const lists = (names) => names.filter((name) => LIST_FILE.test(name));
+  // A symlink or directory in place of a list is neither a valid list nor "still present".
+  const isRegularFile = (file) => lstatSync(join(root, file), { throwIfNoEntry: false })?.isFile() === true;
+  const rootEntries = readdirSync(root).sort();
+  const files = positionals.length > 0 ? positionals.map((file) => relative(root, resolve(file))) : lists(rootEntries);
+  // `<mode> <type> <hash>\t<name>`; only regular-file blobs count as lists at the base.
+  const baseFiles =
+    values.base === undefined
+      ? []
+      : lists(
+          decode(git("ls-tree", "--end-of-options", values.base))
+            .split("\n")
+            .flatMap((line) => (/^100(644|755) blob /.test(line) ? [line.slice(line.indexOf("\t") + 1)] : [])),
+        );
+
+  if (files.length === 0) fail(undefined, `no notary-keys.<env>.json found in ${root}`);
+  for (const name of rootEntries) {
+    if (LIST_LOOKALIKE.test(name) && !LIST_FILE.test(name))
+      fail(name, "looks like a key list but is not named notary-keys.<env>.json");
+  }
+  const removed = baseFiles.filter((file) => !isRegularFile(file));
+  removed.forEach((file) => fail(file, `removed or not a regular file; key lists are never deleted or renamed`));
+
+  const summary = (file, errors) => `${file}: ${errors === 0 ? "OK" : `${errors} error(s)`}`;
+  for (const file of files) {
+    if (removed.includes(file)) continue;
+    if (!isRegularFile(file)) {
+      fail(file, "not a regular file");
+      continue;
+    }
+    // A failure here is specific to this file (unreadable, not UTF-8, pathological content); the
+    // remaining lists are still checked.
+    try {
+      const raw = decode(readFileSync(join(root, file)));
+      const base = baseFiles.includes(file)
+        ? decode(git("show", "--end-of-options", `${values.base}:${file}`))
+        : undefined;
+      if (values.base !== undefined && base === undefined)
+        report("warning", file, `not present at ${values.base}; change rules skipped`);
+      const errors = validate(raw, { base });
+      errors.forEach((error) => fail(file, error));
+      if (errors.length === 0) {
+        const warnings = await checkLive(raw);
+        warnings.forEach((warning) => report("warning", file, warning));
+      }
+      console.log(process.env.GITHUB_ACTIONS ? escape(summary(file, errors.length)) : summary(file, errors.length));
+    } catch (cause) {
+      fail(file, describe(cause));
+    }
+  }
+} catch (cause) {
+  fail(undefined, describe(cause));
+}
+process.exitCode = failed ? 1 : 0;

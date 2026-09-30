@@ -9,6 +9,7 @@ that the key belongs to a vlayer notary, compare it against this list.
 | Environment | URL |
 | --- | --- |
 | Production | `https://keys.vlayer.xyz/notary-keys.production.json` |
+| JSON Schema | `https://keys.vlayer.xyz/schema.json` |
 
 Changes are made by pull request to this repository and served from `main` via
 GitHub Pages. The commit history is the audit trail; an immutable snapshot of any
@@ -44,13 +45,17 @@ version is available at `https://raw.githubusercontent.com/vlayer-xyz/notary-key
 | `keys[].fingerprint` | Primary identifier of the key. Equals `notaryKeyFingerprint` returned by the [vlayer verify API](https://platform.vlayer.xyz/server-side/rest-api/verify). |
 | `keys[].publicKeyPem` | The key as a compressed-point SubjectPublicKeyInfo PEM, byte-identical to the `publicKey` field of the notary's `GET /info`. |
 | `keys[].curve` | `secp256k1` or `secp256r1`. |
-| `keys[].validFrom` | Start of the window in which the key signed proofs (inclusive). |
+| `keys[].validFrom` | Start of the window in which the key signed proofs (inclusive). Immutable once it has passed; while it is still in the future it may be corrected. If a planned cutover slips, the entry may keep the earlier `validFrom`, which is harmless because no proof exists from before the key was actually used. |
 | `keys[].validUntil` | *Mutable*. End of the window (exclusive), or `null` when the key doesn't have end of validity set yet. Set when the key is rotated out or is going to be rotated out. |
-| `keys[].meta` | Informational only. Verifiers must not base any decision on it. `notaryUrls` lists the notaries signing with the key. |
+| `keys[].meta` | Informational only. Verifiers must not base any decision on it. `notaryUrls` lists the origins of the notaries signing with the key; `GET <origin>/info` serves the key. |
 
 Entries are never removed: a key that has been rotated out stays listed with its
 `validUntil` set, so proofs it signed remain verifiable. Several keys may have an
-open window at the same time. Unknown fields must be ignored.
+open window at the same time.
+
+Verifiers must ignore fields they don't recognise, at any level. The published
+`schema.json` describes only the fields above and accepts others; new fields never
+change the meaning of existing ones without a `schemaVersion` bump.
 
 ## Verifier rule
 
@@ -100,4 +105,5 @@ you have been unable to refresh as stale.
 - **Rotate a key out**: set its `validUntil` to the moment the last notary will stop
   signing with it, before it actually happens. Do not remove the entry.
 
-Every change bumps `updatedAt`.
+Every change sets `updatedAt` to the current UTC time (`date -u +%FT%TZ`); a change
+that keeps the previous `updatedAt`, or sets one more than 7 days old, is rejected.

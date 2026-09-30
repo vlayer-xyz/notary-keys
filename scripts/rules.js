@@ -1,0 +1,312 @@
+import { createHash, createPublicKey } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { Ajv2020 } from "ajv/dist/2020.js";
+
+const published = JSON.parse(readFileSync(new URL("../schema.json", import.meta.url), "utf8"));
+const ajv = new Ajv2020({ allErrors: true, schemas: [published] });
+const matchesPublishedSchema = ajv.getSchema(published.$id);
+// The published schema is lenient so that verifiers keep working when fields are added. Our own
+// lists are held to a stricter shape: nothing outside the described fields (so a typo like
+// `validUntill` fails) except inside `meta`, and `meta.notaryUrls` present for the live check.
+const matchesStrictSchema = ajv.compile({
+  $ref: published.$id,
+  type: "object",
+  unevaluatedProperties: false,
+  properties: {
+    keys: {
+      type: "array",
+      items: {
+        $ref: `${published.$id}#/$defs/key`,
+        type: "object",
+        unevaluatedProperties: false,
+        required: ["meta"],
+        properties: { meta: { type: "object", required: ["notaryUrls"] } },
+      },
+    },
+  },
+});
+
+export const CURVES = {
+  secp256k1: { name: "secp256k1", spkiPrefix: Buffer.from("3036301006072a8648ce3d020106052b8104000a032200", "hex") },
+  prime256v1: {
+    name: "secp256r1",
+    spkiPrefix: Buffer.from("3039301306072a8648ce3d020106082a8648ce3d030107032200", "hex"),
+  },
+};
+const IMMUTABLE = ["publicKeyPem", "curve"];
+const HOUR_MS = 60 * 60 * 1000;
+const DAY_MS = 24 * HOUR_MS;
+const RETROACTIVE_GRACE_DAYS = 7;
+const UPDATED_AT_MAX_AHEAD_HOURS = 1;
+const LIVE_TIMEOUT_MS = 15_000;
+const LIVE_MAX_BODY_BYTES = 64 * 1024;
+
+const canonical = (value) => `${JSON.stringify(value, null, 2)}\n`;
+const time = (timestamp) => Date.parse(timestamp);
+// Only meaningful for strings already matching the schema's timestamp pattern (`…:SSZ`).
+const isInstant = (timestamp) => new Date(timestamp).toJSON() === timestamp.replace("Z", ".000Z");
+const label = (key, index) => `keys[${index}] (${key.fingerprint.slice(0, 12)}…)`;
+const isOpen = (key, now) => time(key.validFrom) <= now && (key.validUntil === null || now < time(key.validUntil));
+const toPem = (der) =>
+  `-----BEGIN PUBLIC KEY-----\n${der
+    .toString("base64")
+    .match(/.{1,64}/g)
+    .join("\n")}\n-----END PUBLIC KEY-----\n`;
+
+/** Curve, compressed SEC1 point and the canonical compressed-point SPKI PEM of a public key. */
+function parseKey(pem) {
+  const key = createPublicKey(pem);
+  if (key.asymmetricKeyType !== "ec") throw new Error(`not an EC key (${key.asymmetricKeyType})`);
+  // Degenerate points (e.g. the point at infinity) load but make `asymmetricKeyDetails` and the
+  // JWK export abort the process with a native assertion; the DER export rejects them cleanly.
+  key.export({ format: "der", type: "spki" });
+  const curve = CURVES[key.asymmetricKeyDetails.namedCurve];
+  if (curve === undefined) throw new Error(`unsupported curve ${key.asymmetricKeyDetails.namedCurve}`);
+  const { x, y } = key.export({ format: "jwk" });
+  // SEC1 compressed form: 02 for even y, 03 for odd y, followed by x.
+  const yBytes = Buffer.from(y, "base64url");
+  const point = Buffer.concat([Buffer.from([2 + (yBytes.at(-1) & 1)]), Buffer.from(x, "base64url")]);
+  return { curve: curve.name, point, canonicalPem: toPem(Buffer.concat([curve.spkiPrefix, point])) };
+}
+
+function describeSchemaError({ instancePath, message, params }) {
+  const path = instancePath || "<root>";
+  const unknown = params.additionalProperty ?? params.unevaluatedProperty;
+  if (unknown !== undefined) return `schema: ${path} has unknown field "${unknown}"`;
+  if (params.allowedValue !== undefined) return `schema: ${path} ${message}: ${JSON.stringify(params.allowedValue)}`;
+  if (params.allowedValues !== undefined) {
+    return `schema: ${path} ${message}: ${params.allowedValues.map((value) => JSON.stringify(value)).join(", ")}`;
+  }
+  return `schema: ${path} ${message}`;
+}
+
+/** The schema only checks the shape of timestamps; this checks they denote real instants. */
+function checkTimestamps(doc) {
+  const fields = [
+    ["updatedAt", doc.updatedAt],
+    ...doc.keys.flatMap((key, i) => [
+      [`keys[${i}].validFrom`, key.validFrom],
+      [`keys[${i}].validUntil`, key.validUntil],
+    ]),
+  ];
+  return fields
+    .filter(([, value]) => value !== null && !isInstant(value))
+    .map(([path, value]) => `${path}: ${value} is not a valid UTC instant`);
+}
+
+// Each rule below takes { raw, doc, base, now } and returns a list of error messages. They may
+// assume `doc` and `base` match the strict and published schema respectively and that every
+// timestamp in both is a real instant.
+
+function checkFormatting({ raw, doc }) {
+  return raw === canonical(doc) ? [] : ["file is not canonically formatted (2-space indent, trailing newline)"];
+}
+
+function checkUpdatedAt({ doc, now }) {
+  return time(doc.updatedAt) > now + UPDATED_AT_MAX_AHEAD_HOURS * HOUR_MS
+    ? [`updatedAt ${doc.updatedAt} is more than ${UPDATED_AT_MAX_AHEAD_HOURS}h in the future`]
+    : [];
+}
+
+function checkUniqueFingerprints({ doc }) {
+  const seen = new Map();
+  return doc.keys.flatMap((key, i) => {
+    const first = seen.get(key.fingerprint);
+    seen.set(key.fingerprint, first ?? i);
+    return first === undefined ? [] : [`keys[${i}]: duplicate fingerprint, first seen at keys[${first}]`];
+  });
+}
+
+function checkKeys({ doc }) {
+  return doc.keys.flatMap((key, i) => {
+    const errors = [];
+    let parsed;
+    try {
+      parsed = parseKey(key.publicKeyPem);
+    } catch (cause) {
+      return [`${label(key, i)}: publicKeyPem does not parse: ${cause.message}`];
+    }
+    const fingerprint = createHash("sha256").update(parsed.point).digest("hex");
+    if (parsed.curve !== key.curve) {
+      errors.push(`${label(key, i)}: curve is ${key.curve} but publicKeyPem is ${parsed.curve}`);
+    }
+    if (fingerprint !== key.fingerprint) {
+      errors.push(`${label(key, i)}: fingerprint is ${key.fingerprint} but sha256(compressed point) is ${fingerprint}`);
+    }
+    if (key.publicKeyPem !== parsed.canonicalPem) {
+      const expected = JSON.stringify(parsed.canonicalPem);
+      errors.push(
+        `${label(key, i)}: publicKeyPem must be the compressed-point SPKI PEM as the notary's GET /info returns it: ${expected}`,
+      );
+    }
+    if (key.validUntil !== null && time(key.validUntil) <= time(key.validFrom)) {
+      errors.push(`${label(key, i)}: validUntil ${key.validUntil} is not after validFrom ${key.validFrom}`);
+    }
+    return errors;
+  });
+}
+
+/**
+ * Change rules against the previous version: entries are append-only, identity fields are
+ * immutable, a window's `validFrom` is immutable once it has opened, an already-closed window
+ * may only be shortened, no changed `validFrom` or `validUntil` is dated more than
+ * RETROACTIVE_GRACE_DAYS into the past, and `updatedAt` never moves backwards and is set to a
+ * recent time whenever anything else changed.
+ */
+function checkChanges({ doc, base, now }) {
+  if (base === undefined) return [];
+  const errors = [];
+  const earliest = now - RETROACTIVE_GRACE_DAYS * DAY_MS;
+  const retroactive = `more than ${RETROACTIVE_GRACE_DAYS} days in the past`;
+  const previous = new Map(base.keys.map((key) => [key.fingerprint, key]));
+
+  doc.keys.forEach((key, i) => {
+    const old = previous.get(key.fingerprint);
+    if (old === undefined) {
+      if (time(key.validFrom) < earliest) {
+        errors.push(
+          `${label(key, i)}: new entry with validFrom ${key.validFrom} ${retroactive}; entries cannot be backdated`,
+        );
+      }
+      return;
+    }
+    for (const field of IMMUTABLE) {
+      if (key[field] !== old[field]) errors.push(`${label(key, i)}: ${field} changed; it is immutable once published`);
+    }
+    if (key.validFrom !== old.validFrom) {
+      if (time(old.validFrom) <= now) {
+        errors.push(`${label(key, i)}: validFrom ${old.validFrom} has passed and is immutable`);
+      } else if (time(key.validFrom) < earliest) {
+        errors.push(`${label(key, i)}: validFrom ${key.validFrom} is ${retroactive}; entries cannot be backdated`);
+      }
+    }
+    const wasClosed = old.validUntil !== null && time(old.validUntil) <= now;
+    if (wasClosed && (key.validUntil === null || time(key.validUntil) > time(old.validUntil))) {
+      errors.push(`${label(key, i)}: validUntil ${old.validUntil} has passed and can only be moved earlier`);
+    }
+    if (key.validUntil !== old.validUntil && key.validUntil !== null && time(key.validUntil) < earliest) {
+      errors.push(
+        `${label(key, i)}: validUntil ${key.validUntil} is ${retroactive}; this retroactively invalidates proofs and cannot be undone`,
+      );
+    }
+  });
+
+  for (const old of base.keys) {
+    if (!doc.keys.some((key) => key.fingerprint === old.fingerprint)) {
+      errors.push(`key ${old.fingerprint.slice(0, 12)}…: removed; entries are never deleted, set validUntil instead`);
+    }
+  }
+
+  const withoutUpdatedAt = ({ updatedAt, ...rest }) => canonical(rest);
+  const changed = withoutUpdatedAt(doc) !== withoutUpdatedAt(base);
+  if (time(doc.updatedAt) < time(base.updatedAt)) {
+    errors.push(`updatedAt ${doc.updatedAt} is before the previous version's ${base.updatedAt}`);
+  } else if (changed && time(doc.updatedAt) === time(base.updatedAt)) {
+    errors.push(`list changed but updatedAt ${doc.updatedAt} was not bumped; set it to the current UTC time`);
+  } else if (changed && time(doc.updatedAt) < earliest) {
+    errors.push(`list changed but updatedAt ${doc.updatedAt} is ${retroactive}; set it to the current UTC time`);
+  }
+  return errors;
+}
+
+function parseJson(raw, what) {
+  try {
+    return { doc: JSON.parse(raw) };
+  } catch (cause) {
+    return { error: `${what} is not valid JSON: ${cause.message}` };
+  }
+}
+
+/**
+ * Validates the raw contents of a key list. `base` is the raw previous version (enables the
+ * change rules); `now` is the reference time for the window rules.
+ * @returns {string[]} error messages, empty when the list is valid
+ */
+export function validate(raw, { base, now = Date.now() } = {}) {
+  const { doc, error } = parseJson(raw, "file");
+  if (error !== undefined) return [error];
+  if (!matchesStrictSchema(doc)) return [...new Set(matchesStrictSchema.errors.map(describeSchemaError))];
+  const timestampErrors = checkTimestamps(doc);
+  if (timestampErrors.length > 0) return timestampErrors;
+
+  let baseDoc;
+  if (base !== undefined) {
+    const parsed = parseJson(base, "previous version");
+    if (parsed.error !== undefined) return [parsed.error];
+    if (
+      !matchesPublishedSchema(parsed.doc) ||
+      checkTimestamps(parsed.doc).length > 0 ||
+      checkUniqueFingerprints({ doc: parsed.doc }).length > 0
+    ) {
+      return ["previous version is not a valid list; change rules cannot run"];
+    }
+    baseDoc = parsed.doc;
+  }
+
+  const context = { raw, doc, base: baseDoc, now };
+  return [checkFormatting, checkUpdatedAt, checkUniqueFingerprints, checkKeys, checkChanges].flatMap((rule) =>
+    rule(context),
+  );
+}
+
+// The signal is wired to the reader explicitly: once headers have arrived, fetch's own abort
+// handling of the body is not guaranteed to fire.
+async function readBody(body, limit, signal) {
+  const reader = body.getReader();
+  const abort = () => reader.cancel(signal.reason).catch(() => {});
+  signal.addEventListener("abort", abort, { once: true });
+  try {
+    const chunks = [];
+    let size = 0;
+    for (let chunk = await reader.read(); !chunk.done; chunk = await reader.read()) {
+      size += chunk.value.length;
+      if (size > limit) {
+        await reader.cancel();
+        throw new Error(`body exceeds ${limit} bytes`);
+      }
+      chunks.push(chunk.value);
+    }
+    if (signal.aborted) throw signal.reason;
+    return Buffer.concat(chunks).toString("utf8");
+  } finally {
+    signal.removeEventListener("abort", abort);
+  }
+}
+
+async function probeNotary(url, key, name, fetch, timeoutMs) {
+  const signal = AbortSignal.timeout(timeoutMs);
+  let response;
+  try {
+    response = await fetch(url, { signal, redirect: "error" });
+  } catch (cause) {
+    return `${name}: ${url} unreachable: ${cause.cause?.message ?? cause.message}`;
+  }
+  if (!response.ok) return `${name}: ${url} returned HTTP ${response.status}`;
+  let body = "";
+  try {
+    if (response.body !== null) body = await readBody(response.body, LIVE_MAX_BODY_BYTES, signal);
+  } catch (cause) {
+    return `${name}: ${url} body could not be read: ${cause.message}`;
+  }
+  if (body === "") return `${name}: ${url} returned an empty body`;
+  const { doc: info, error } = parseJson(body, "response");
+  if (error !== undefined) return `${name}: ${url} did not return JSON`;
+  if (typeof info?.publicKey !== "string") return `${name}: ${url} response has no publicKey field`;
+  return info.publicKey === key.publicKeyPem ? null : `${name}: ${url} serves a different publicKey than publicKeyPem`;
+}
+
+/**
+ * Fetches GET /info from every notary of every open-window key and compares the served key
+ * with the listed one. Advisory: a mismatch is expected while a rotation is in progress.
+ * Expects `raw` to have passed `validate`.
+ * @returns {Promise<string[]>} warning messages
+ */
+export async function checkLive(raw, { now = Date.now(), fetch = globalThis.fetch, timeoutMs = LIVE_TIMEOUT_MS } = {}) {
+  const { keys } = JSON.parse(raw);
+  const probes = keys.flatMap((key, i) =>
+    isOpen(key, now)
+      ? key.meta.notaryUrls.map((url) => probeNotary(`${url}/info`, key, label(key, i), fetch, timeoutMs))
+      : [],
+  );
+  return (await Promise.all(probes)).filter((warning) => warning !== null);
+}
