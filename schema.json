@@ -49,7 +49,7 @@
         },
         "validFrom": {
           "$ref": "#/$defs/timestamp",
-          "description": "Start of the window in which the key signed proofs (inclusive). Immutable once published."
+          "description": "Start of the window in which the key signed proofs (inclusive). Immutable once it has passed."
         },
         "validUntil": {
           "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/timestamp" }],
